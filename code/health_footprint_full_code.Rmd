@@ -1,0 +1,2416 @@
+---
+title: 'International Comparison of Health Care Carbon Footprints: Reproducible
+  Code for Estimation, Figures and Statistical Analysis'
+author: "Peter Paul Pichler, Ingram S. Jaccard, Ulli Weisz, and Helga Weisz"
+date: "3/28/2019"
+output: 
+  pdf_document: 
+    latex_engine: xelatex
+    keep_tex: true
+params:
+    analyze: TRUE
+    visualize: TRUE
+---
+
+This file contains all code to estimate the health carbon footprints, generate the figures in both the main manuscript and the supplementary information, and perform the statistical analysis. It is located in the 'code' sub-folder, pulling files from the 'data' sub-folder and outputting figures and tables into the 'figures' sub-folder. These three sub-folders are self-contained. Keeping 'params:analyze:' and 'params:visualize:' both set to 'TRUE' in the Rmarkdown yaml header above runs the entire code, except for those code chunks set to 'eval = FALSE' which all required a high performance cluster computer. In order to generate only the figures and tables from the main manuscript, set 'params: analyze:' to 'FALSE' in the yaml header above. The data frame from which all main manuscript figures and tables are produced ('df_hcf') is saved in the 'data' sub-folder as both a .csv and .rds file. It can be read in for generating those figures and tables without running the whole code. Both 'params:analyze:' and params:visualize:' need to be set to TRUE in order to generate the figures in the SI, as they require a few more input files than the main 'df_hcf' data frame. 
+
+We first set the two working directories, one for data and one for figure/table output. We also read in required R packages and set a global variable of our study years.
+
+```{r , warning=F, message=F}
+
+# Set working directories:
+data_dir = "../data/"
+out_dir_figures = "../figures/"
+
+# Libraries:
+library(tidyverse)
+library(ggpubr)
+library(knitr)
+library(kableExtra)
+library(readxl)
+library(latex2exp)
+library(stargazer)
+library(summarytools)
+library(plm)
+library(lmtest)
+library(tseries)
+library(RColorBrewer)
+library(rworldmap)
+
+# figure color scheme
+colorvalues = brewer.pal(n = 4, name = "YlGnBu")
+
+# Create vector of study years:
+Years = seq(2000,2014,1)
+
+
+```
+
+# Input files
+
+## Local
+
+List of files in the 'data' folder, with a brief explanation and their source. These are all the files that are loaded at some point in the script, some being the saved output from calculations performed on the cluster computer. All data from the World Bank are .xls files with metadata included. 
+
+```{r , warning=F, message=F, echo = FALSE}
+
+file_name = c("OECD_healthexpenditures.csv",
+              "OECD_healthinvestment.csv", 
+              "IMF_exchange_rates_annual.csv",
+              "mapped_ints_OECD_00_07.rds",
+              "mapped_ints_OECD_08_15.rds",
+              "mapped_ints_non_OECD.rds",
+              "...SH.XPD.TOTL.ZS...xls",
+              "...SH.XPD.PUBL.ZS...xls",
+              "...NY.GDP.MKTP.CD...xls",
+              "...NY.GDP.MKTP.KD...xls",
+              "...NY.GDP.MKTP.PP.KD...xls",
+              "national_CO2_footprints.rds",
+              "...SP.POP.TOTL...xls",
+              "EDGAR_direct_CO2.csv",
+              "IEA_energy.csv",
+              "hcf_2014_prod_sectors.rds",
+              "labels_T_E26.csv",
+              "E26_all_emissions_2014.rds",
+              "sector_breakdown.csv",
+              "fd_and_t_ids.csv")
+
+              
+indicator = c("Current health care expenditure (LCU)",
+              "Health care investment expenditure (LCU)",
+              "IMF exchange rates (LCU/USD)",
+              "intensities OECD 2000-2007 (kt/'000 current USD)",
+              "intensities OECD 2008-2015 (kt/'000 current USD)",
+              "intensities non-OECD (kt/'000 current USD)",
+              "health expenditure (% of GDP)",
+              "public health exp (% of GDP)",
+              "GDP (current USD)",
+              "GDP (constant 2010 USD)",
+              "GDP (constant 2011 int. USD PPP)",
+              "national footprints (kt CO2)",
+              "population",
+              "EDGAR direct CO2 (kt CO2)",
+              "IEA total final energy consumption (Mtoe)",
+              "hcf 2014 by production sector (kt CO2)",
+              "Eora-26 T table labels",
+              "Eora-26 footprints (kt CO2)",
+              "Eora geographical/production sector breakdown",
+              "FD and T table ids of each country in full Eora")
+  
+
+source = c("OECD",
+           "OECD",
+           "IMF",
+           "Eora/cluster",
+           "Eora/cluster",
+           "Eora/cluster",
+           "WB",
+           "WB",
+           "WB",
+           "WB",
+           "WB",
+           "Eora/cluster",
+           "WB",
+           "EDGAR",
+           "IEA",
+           "Eora/cluster",
+           "Eora-26",
+           "Eora-26/cluster",
+           "manual",
+           "manual")
+
+data.frame(file_name,indicator,source) %>%
+  kable(format = "markdown",escape = F,col.names = c("File name","Indicator","Source")) 
+
+```
+
+OECD: https://stats.oecd.org/ \
+IMF: https://www.imf.org/external/np/fin/data/param_rms_mth.aspx \
+WB: https://data.worldbank.org/ \
+EDGAR: http://edgar.jrc.ec.europa.eu/ \
+IEA: https://www.iea.org/statistics/ \
+Eora: https://worldmrio.com/ 
+
+## On Cluster Computer
+
+List of files used in the cluster calculations, those which are manually created .csvs being in the 'data/for_cluster/' sub-sub-folder. The rest are downloaded directly from the Eora website and are too large to include in the folder. 
+
+```{r , warning=F, message=F, echo = FALSE}
+
+file_type = c("T tables (every study year)",
+         "Final Demand (FD) tables (every study year)",
+         "Trade Margin FD tables (every study year)",
+         "Transport Margin FD tables (every study year)",
+         "Taxes FD tables (every study year)",
+         "Subsidies FD tables (every study year)",
+         "Satellite tables (every study year)",
+         "Eora-26 2014 T table",
+         "Eora-26 2014 FD table",
+         "Eora-26 2014 Satellite table",
+         "concordance matrices",
+                       "trade_ids.csv",
+              "transport_ids.csv",
+         "index_t.csv",
+              "index_y.csv",
+              "index_q.csv")
+
+source = c("full Eora",
+           "full Eora",
+           "full Eora",
+           "full Eora",
+           "full Eora",
+           "full Eora",
+           "full Eora",
+           "Eora-26",
+           "Eora-26",
+           "Eora-26",
+           "manually created",
+  "manually created; country trade ids in full Eora",
+  "manually created; country transports ids in full Eora",
+  "Full Eora T table labels",
+              "Full Eora final demand table labels",
+              "Full Eora satellite table labels")
+  
+data.frame(file_type,source) %>%
+  kable(format = "markdown",escape = F,col.names = c("File type","Source"))
+
+```
+
+# Health carbon footprint estimates
+
+The health carbon footprint estimates combine health expenditure data mapped to Eora CO2 intensities calculated using a cluster computer. 
+
+## OECD health expenditure
+
+First, read in OECD current health expenditure and health investment data from the OECD health statistics database, interpolate missing investment data, join together and convert all expenditure to current US dollar (USD) (OECD health care expenditure data is expressed in local currency units).
+
+```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+
+# Read in OECD health care expenditure data 
+# Filter for current prices and current (public + private) health expenditure
+# of each provider category. Drop the years 2015 and 2016 and observations 
+# where health expenditures are only partially reported:
+hexp_current = read.csv(paste0(data_dir, 
+                                    "OECD_healthexpenditures.csv")) %>% 
+  filter(Measure == "Current prices", 
+           Function == "Current expenditure on health (all functions)", 
+           !(Financing.scheme == "All financing schemes"), 
+         !(Provider == "All providers")) %>% 
+  select(Financing.scheme, Provider, Measure, LOCATION, Year, Unit, Value) %>%
+    filter(!(Year %in% c("2015","2016")), 
+         !(LOCATION=="IRL" & Year%in%c(2000,2001,2002,2003)) & 
+         !(LOCATION=="KOR" & Year==2000) &
+         !(LOCATION=="SVK" & Year%in%c(2000,2001,2002,2003)))
+
+# Sum health expenditure by country and year:
+hexp_current_summarised = hexp_current %>% 
+  group_by(LOCATION, Year) %>% 
+  summarise(Value = sum(Value))
+
+# Read in OECD health care investment expenditure data
+# Filter for current prices:
+h_inv_incomplete = read.csv(paste0(data_dir, 
+                                   "OECD_healthinvestment.csv")) %>% 
+  filter(Measure == "Current prices") %>% 
+  rename(Financing.scheme = "Provider", 
+         Provider = "Type.of.asset") %>% 
+  select(Financing.scheme, Provider, Measure, LOCATION, Year, Unit, Value)
+
+# Interpolate missing health care investment expenditure data, 
+# either average proportion of current (public + private) health 
+# care expenditure for countries where investment data exists for 
+# some years, otherwise 5 % (average across all countries and 
+# all time periods where investment data exists) of current 
+# health care expenditure for countries where no investment 
+# data exists:
+h_inv_interpolated = hexp_current_summarised %>% 
+  left_join(h_inv_incomplete, by = c('LOCATION','Year')) %>%
+   mutate(proportion_investment = Value.y/Value.x)
+
+h_inv_proportions = h_inv_interpolated %>% 
+  group_by(LOCATION) %>% 
+  summarise_at(vars(proportion_investment), funs(mean(., na.rm=TRUE))) %>% 
+  mutate(proportion_investment = ifelse(is.na(proportion_investment), 
+                                        0.05, proportion_investment))
+
+h_inv = h_inv_interpolated %>% 
+  left_join(h_inv_proportions, by = "LOCATION") %>% 
+  mutate(Value = ifelse(is.na(proportion_investment.x),
+                        Value.x*proportion_investment.y,Value.y)) %>% 
+  select(LOCATION, Year, Financing.scheme, Provider, Measure, Unit, Value) %>% 
+  mutate(Unit = ifelse(LOCATION %in% c("AUT","BEL","DEU","ESP","EST",
+                                       "FIN","FRA","GRC","IRL","ITA","LUX",
+                                       "LVA","NLD","PRT","SVK","SVN"), "Euro", 
+                ifelse(LOCATION == "AUS", "Australian Dollar",
+                ifelse(LOCATION == "CAN", "Canadian Dollar",
+                ifelse(LOCATION == "CHE", "Swiss Franc",
+                ifelse(LOCATION == "CZE", "Czech Koruna",
+                ifelse(LOCATION == "DNK", "Danish Krone",
+                ifelse(LOCATION == "GBR", "Pound Sterling",
+                ifelse(LOCATION == "HUN", "Forint",
+                ifelse(LOCATION == "ISL", "Iceland Krona",
+                ifelse(LOCATION == "ISR", "New Israeli Sheqel",
+                ifelse(LOCATION == "JPN", "Yen",
+                ifelse(LOCATION == "KOR", "Won",
+                ifelse(LOCATION == "MEX", "Mexican Peso",
+                ifelse(LOCATION == "NOR", "Norwegian Krone",
+                ifelse(LOCATION == "NZL", "New Zealand Dollar",
+                ifelse(LOCATION == "POL", "Zloty",
+                ifelse(LOCATION == "SWE", "Swedish Krona",
+                ifelse(LOCATION == "TUR", "Turkish Lira",
+                ifelse(LOCATION == "USA", "US Dollar", Unit)))))))))))))))))))) %>% 
+  ungroup() %>% fill(Financing.scheme, Provider, Measure) 
+
+# Bind investments to current expenditure:
+hexp_w_inv = hexp_current %>% 
+  bind_rows(h_inv)
+
+# Read in historical exchange rate data from IMF:
+ex_rates = read.csv(paste0(data_dir, 
+                                     "IMF_exchange_rates_annual.csv"), header = T)
+
+# Bind to expenditure data and convert to current USD:
+hexp = hexp_w_inv %>% 
+  left_join(ex_rates, by = c("Year", "Unit")) %>% 
+  mutate(hexp_current_USD = Value / EX_rate)
+
+```
+
+## OECD mapped intensities
+
+This code calculates the mapped CO2 intensities for the OECD countries in our sample. It needs a lot of resources and so was run on our high performance cluster. It first creates a function which takes a manually created concordance matrix mapping the Eora productions sectors to the 19 SHA health expenditure categories (all concordance matrices are found in the 'data/for_cluster/' sub-sub-folder), and returns the mapped total CO2 intensities of the SHA expenditure categories. Then it loops through each study year, performing the standard input-output calculation with the full version of Eora to calculate the unmapped total CO2 intensities of every Eora production sector in base price for that year. Then the concordance to mapped intensities function is called for each study country in that year. The code chunk is set to 'eval = FALSE' and the saved mapped intensities are loaded locally in the following code chunk. 
+
+```{r, warning = FALSE, message = FALSE, eval = FALSE}
+
+# Calculate mapped intensities for all OECD countries and all years
+# We show here how these are calculated using a cluster computer, saved,
+# and then loaded locally in the following code chunk. This step uses the Eora 
+# tables directly available for download from https://worldmrio.com/, some
+# of which (the T matrices especially) were too large to perform calculations
+# with locally. 
+
+# Read in full Eora labels:
+FULL_T_labels = read.csv(paste0(data_dir, "/for_cluster/index_t.csv"))
+FULL_FD_labels = read.csv(paste0(data_dir, "/for_cluster/index_y.csv"))
+Full_Satellite_labels = read.csv(paste0(data_dir, "/for_cluster/index_q.csv"))
+
+# First create empty matrix to populate:
+Fully_mapped_intensities_OECD = NULL
+
+# Categories to bind with each country's intensities for each year:
+Financing.scheme = as.matrix(c(rep("Government/compulsory schemes", 9), 
+                        rep("Voluntary schemes/household out-of-pocket payments", 9), 
+                        "All domestic providers"))
+Provider = as.matrix(c(rep(c("Hospitals", 
+                        "Residential long-term care facilities", 
+                        "Providers of ambulatory health care", 
+                        "Providers of ancillary services",
+                        "Retailers and other providers of medical goods", 
+                        "Providers of preventive care", 
+                        "Providers of health care system administration and financing", 
+                        "Rest of the economy", "Rest of the world"), 2), 
+                        "Gross fixed capital formation (all types of assets)"))
+
+# Read in created .csv with Eora final demand index start ids 
+# and T table index ids, as well as trade sector ids 
+# and transport sector ids for every country:
+fd_and_t_ids = read.csv(paste0(data_dir, "fd_and_t_ids.csv"), header = T) 
+row.names(fd_and_t_ids) = fd_and_t_ids$iso3
+
+trade_ids = read.csv(paste0(data_dir, "/for_cluster/trade_ids.csv"), header = T)
+
+transport_ids = read.csv(paste0(data_dir, "/for_cluster/transport_ids.csv"), header = T)
+
+# Create vector of the OECD countries to loop through:
+OECD_countries = c("USA","GBR","JPN","ESP", "AUS","CAN","DEU","KOR","TUR","AUT",
+              "FRA","ITA","MEX", "BEL", "CHE", "CZE", "DNK", "EST", "FIN", 
+              "GRC", "HUN", "IRL", "ISL", "ISR", "LUX", "LVA", "NLD", "NOR", 
+              "NZL", "POL", "PRT", "SVK",
+              "SVN", "SWE")
+
+# Write function that takes one country's concordance matrix and 
+# the relevant country final demands and total CO2 intensities 
+# of the Eora production sectors, returning the mapped 
+# intensities of the 19 health expenditure categories 
+# for each country in each year:
+Concordance_to_map = function(x){
+  final_demand_summed = rowSums(final_demand[,
+                            fd_and_t_ids[country_current,"fd_start_id"]:
+                            (fd_and_t_ids[country_current,"fd_start_id"] + 2)])
+  final_demand_PP_summed = as.matrix(rowSums(final_demand_PP[,
+                            fd_and_t_ids[country_current,"fd_start_id"]:
+                            (fd_and_t_ids[country_current,"fd_start_id"] + 2)]))
+  final_demand_trade_summed = as.matrix(rowSums(trade_margin_FD[,
+                            fd_and_t_ids[country_current,"fd_start_id"]:
+                            (fd_and_t_ids[country_current,"fd_start_id"] + 2)]))
+  final_demand_transport_summed = as.matrix(rowSums(transport_margin_FD[,
+                            fd_and_t_ids[country_current,"fd_start_id"]:
+                            (fd_and_t_ids[country_current,"fd_start_id"] + 2)]))
+  percent_BP = as.matrix(final_demand_summed/final_demand_PP_summed)
+  percent_BP[is.nan(percent_BP)] <- 0
+  percent_trade = as.matrix(final_demand_trade_summed/final_demand_PP_summed)
+  percent_trade[is.nan(percent_trade)] <- 0
+  percent_transport = as.matrix(final_demand_transport_summed/final_demand_PP_summed)
+  percent_transport[is.nan(percent_transport)] <- 0
+  xm_diag = diag(final_demand_summed)
+  summation_vector = rep(1,length(final_demand_summed))
+  xn = as.numeric(as.matrix(Concordance_matrix) %*% 
+                    xm_diag %*% as.vector(summation_vector))
+  xn_diag = diag(xn)
+  M = solve(xn_diag) %*% as.matrix(Concordance_matrix) %*% xm_diag
+
+  Country_ids = trade_ids %>% filter(iso3 == country_current)
+  
+  trade_output = 0
+  
+  for (i in Country_ids$trade_id){
+    i = as.numeric(i)
+    trade_sector_output = total_output[i,]
+    trade_output = trade_output + trade_sector_output
+  }
+  
+  TIV_country_trade = 0
+  TIV_country_trade_breakdown = 0
+  
+  for (i in Country_ids$trade_id){
+    i = as.numeric(i)
+    intermediate_trade = TIV[,i] * (total_output[i,]/trade_output)
+    intermediate_trade_breakdown = as.data.frame(
+      full_intensity_breakdown[,i] * (total_output[i,]/trade_output))
+    TIV_country_trade = TIV_country_trade + intermediate_trade
+    TIV_country_trade_breakdown = TIV_country_trade_breakdown + 
+      intermediate_trade_breakdown
+  }
+  
+  Country_ids = transport_ids %>% filter(iso3 == country_current)
+  
+  transport_output = 0
+  
+  for (i in Country_ids$transport_id){
+    i = as.numeric(i)
+    transport_sector_output = total_output[i,]
+    transport_output = transport_output + transport_sector_output
+  }
+  
+  TIV_country_transport = 0
+  TIV_country_transport_breakdown = 0
+  
+  for (i in Country_ids$transport_id){
+    i = as.numeric(i)
+    intermediate_transport = TIV[,i] * (total_output[i,]/transport_output)
+    intermediate_transport_breakdown = as.data.frame(
+      full_intensity_breakdown[,i] * (total_output[i,]/transport_output))
+    TIV_country_transport = TIV_country_transport + intermediate_transport
+    TIV_country_transport_breakdown = TIV_country_transport_breakdown + 
+      intermediate_transport_breakdown
+  }
+  
+  TIV_country_trade_rep = as.data.frame(rep(TIV_country_trade,
+                                            length(percent_trade)))
+  TIV_country_transport_rep = as.data.frame(rep(TIV_country_transport,
+                                            length(percent_transport)))
+  
+  TIV_PP = (t(TIV) * as.vector(percent_BP)) + 
+    (TIV_country_trade_rep * as.vector(percent_trade)) + 
+    (TIV_country_transport_rep * as.vector(percent_transport))
+  mapped_intensities = M %*% as.matrix(TIV_PP)
+  
+  TIV_country_trade_breakdown_rep = as.data.frame(rep(
+    TIV_country_trade_breakdown,length(percent_trade)))
+  TIV_country_transport_breakdown_rep = as.data.frame(rep(
+    TIV_country_transport_breakdown,length(percent_transport)))
+  
+  full_country_breakdown_PP = (t(full_intensity_breakdown) * as.vector(percent_BP)) + 
+    (t(TIV_country_trade_breakdown_rep) * as.vector(percent_trade)) + 
+    (t(TIV_country_transport_breakdown_rep) * as.vector(percent_transport))
+  
+  mapped_intensities_breakdown = M %*% as.matrix(full_country_breakdown_PP)
+  
+  # save this breakdown for each country in 2014 as input data for SI Figure S4:
+  # saveRDS(mapped_intensities_breakdown, 
+  # paste0("../mapped_intensities_breakdown_2014_", country_current, ".rds"))
+  
+  domestic = as.matrix(rowSums(
+    mapped_intensities_breakdown[,
+                                 fd_and_t_ids[country_current,"T_start_id"]:
+                                fd_and_t_ids[country_current,"T_end_id"]]))
+  foreign = as.matrix(rowSums(mapped_intensities_breakdown) - domestic)
+  
+  # read in created .csv with breakdowns of full Eora by
+  # country and production sectors:
+  sector_breakdown = read.csv("../sector_breakdown.csv") %>% select(Index, Country, OECD)
+  
+  mapped_intensities_breakdown_with_all_sectors = 
+    as.data.frame(cbind(sector_breakdown, t(mapped_intensities_breakdown)))
+  
+  OECD_only = mapped_intensities_breakdown_with_all_sectors %>% filter(OECD == 1) 
+  OECD_mapped = OECD_only %>% select(-Index,-Country,-OECD)
+  OECD_with_domestic = as.matrix(colSums(OECD_mapped))
+  non_OECD = as.matrix(rowSums(mapped_intensities_breakdown) - OECD_with_domestic)
+  OECD = as.matrix(OECD_with_domestic - domestic)
+  
+  Country = rep(country_current, 19)
+  final_intensities = data.frame(Financing.scheme, Provider, Country, Year, 
+                                 mapped_intensities, domestic, foreign, OECD, non_OECD)
+  final_intensities
+}
+  
+# Now loop through each year, calculating the total intensity vector for that year, then 
+# looping through each country within the current year and execute the 'Concordance_to_map' 
+# function written above for normalising it to map to the OECD health expenditure 
+# categories:
+for (i in Years) {
+  year_current = i
+  Technology_matrix = read.csv(paste0("../T", year_current, ".csv", sep=""), 
+                               header=F, row.names=NULL)
+  final_demand = read.csv(paste0("../FD", year_current, ".csv", sep=""), 
+                          header=F, row.names=NULL)
+  trade_margin_FD = read.csv(paste0("../Trade_Margin_FD_",year_current,".csv"), 
+                             header = F)
+  transport_margin_FD = read.csv(paste0("../Transport_Margin_FD_",year_current,".csv"), 
+                                 header = F)
+  taxes_FD = read.csv(paste0("../Taxes_FD_",year_current,".csv"), 
+                      header = F)
+  subsidies_FD = read.csv(paste0("../Subsidies_FD_",year_current,".csv"), 
+                          header = F)
+  final_demand_PP = final_demand + trade_margin_FD + 
+    transport_margin_FD + taxes_FD + subsidies_FD
+  total_output = as.matrix(rowSums(Technology_matrix) + rowSums(final_demand))
+  Satellite = read.csv(paste0("../Satellite", year_current, ".csv", sep=""), 
+                       header=F, row.names=NULL)[,1:14839] 
+  
+  CO2 = as.matrix(t(Satellite[2709,]))
+  
+    DIV = as.matrix(CO2/total_output)
+    DIV[is.na(DIV)]=0
+    
+    A = as.matrix(Technology_matrix) %*% diag(1/as.vector(total_output))
+    A[is.na(A)]=0
+  
+    Leontef_inverse = solve(diag(dim(A)[1])-A)  
+    Leontef_inverse[is.na(Leontef_inverse)]=0
+    
+  TIV = as.data.frame(as.vector(DIV) %*% Leontief_inverse)
+  
+  all_CO2 = t(TIV) * final_demand
+  
+  # save this for each year to calculate national footprints:
+  # saveRDS(all_CO2, paste0("../all_CO2_",year_current,".rds"))
+
+  full_intensity_breakdown = as.vector(DIV) * Leontief_inverse
+  
+  Year = rep(year_current, 19)
+  
+  for (j in OECD_countries){
+    country_current = j
+    Concordance_matrix = t(read.csv(paste0(data_dir, "/for_cluster/concordance_matrix_",
+                                           country_current,".csv"), 
+                                           header = F))
+    final_intensities = Concordance_to_map(Concordance_matrix)
+    final_intensities = final_intensities %>% rename(LOCATION = "Country")
+    Fully_mapped_intensities_OECD = rbind(Fully_mapped_intensities_OECD, 
+                                          final_intensities)
+  }
+}
+
+# saveRDS(Fully_mapped_intensities_OECD, "../mapped_ints_OECD.rds")
+```
+
+Read in the saved mapped intensities for the OECD countries, saved in the cluster computer chunk above. 
+
+```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+
+# Read in OECD mapped intensities saved in previous code chunk 
+# (broken up into 2000 to 2007, and 2008 to 2015 when performing
+# calculation on cluster so need to bind these together):
+OECD_2000_2007 = readRDS(paste0(data_dir,
+                                "mapped_ints_OECD_00_07.rds")) 
+OECD_2008_2015 = readRDS(paste0(data_dir,
+                                "mapped_ints_OECD_08_15.rds")) 
+
+Mapped_intensities_OECD = OECD_2000_2007 %>% bind_rows(OECD_2008_2015) %>% 
+  rename(mapped_intensities = "rep.TIV_country_trade..length.percent_trade..")
+```
+
+## Non-OECD intensities and health expenditure
+
+Set the non-OECD countries in the study, China and India. 
+
+```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+
+# Start calculation of mapped intensities of both non-OECD countries, China and India:
+Non_OECD_countries = c("CHN","IND")
+```
+
+Cluster code for China and India. 'eval = FALSE' here as well. 
+
+```{r, warning = FALSE, message = FALSE, eval = FALSE}
+
+# Calculating the mapped intensities of the non-OECD countries on the cluster
+# computer follows the same procedure, but without solving the matrix inverse 
+# of 'xn_diag' and without including 'financing.scheme' and 'provider' as 
+# columns (only one health expenditure number):
+Fully_mapped_intensities_non_OECD = NULL
+
+Concordance_to_map_non_OECD = function(x){
+  final_demand_summed = rowSums(final_demand[,
+                                fd_and_t_ids[country_current,"fd_start_id"]:
+                                (fd_and_t_ids[country_current,"fd_start_id"] + 2)])
+  final_demand_PP_summed = as.matrix(rowSums(final_demand_PP[,
+                                fd_and_t_ids[country_current,"fd_start_id"]:
+                                (fd_and_t_ids[country_current,"fd_start_id"] + 2)]))
+  final_demand_trade_summed = as.matrix(rowSums(trade_margin_FD[,
+                                fd_and_t_ids[country_current,"fd_start_id"]:
+                                (fd_and_t_ids[country_current,"fd_start_id"] + 2)]))
+  final_demand_transport_summed = as.matrix(rowSums(transport_margin_FD[,
+                                fd_and_t_ids[country_current,"fd_start_id"]:
+                                (fd_and_t_ids[country_current,"fd_start_id"] + 2)]))
+  percent_BP = as.matrix(final_demand_summed/final_demand_PP_summed)
+  percent_BP[is.nan(percent_BP)] <- 0
+  percent_trade = as.matrix(final_demand_trade_summed/final_demand_PP_summed)
+  percent_trade[is.nan(percent_trade)] <- 0
+  percent_transport = as.matrix(final_demand_transport_summed/final_demand_PP_summed)
+  percent_transport[is.nan(percent_transport)] <- 0
+  xm_diag = diag(final_demand_summed)
+  summation_vector = rep(1,length(final_demand_summed))
+  xn = as.numeric(as.matrix(Concordance_matrix) %*% xm_diag %*% 
+                    as.vector(summation_vector))
+  M = (1/xn) %*% as.matrix(Concordance_matrix) %*% xm_diag
+
+  Country_ids = trade_ids %>% filter(iso3 == country_current)
+  
+  trade_output = 0
+  
+  for (i in Country_ids$trade_id){
+    i = as.numeric(i)
+    trade_sector_output = total_output[i,]
+    trade_output = trade_output + trade_sector_output
+  }
+  
+  TIV_country_trade = 0
+  TIV_country_trade_breakdown = 0
+  
+  for (i in Country_ids$trade_id){
+    i = as.numeric(i)
+    intermediate_trade = TIV[,i] * (total_output[i,]/trade_output)
+    intermediate_trade_breakdown = as.data.frame(
+      full_intensity_breakdown[,i] * (total_output[i,]/trade_output))
+    TIV_country_trade = TIV_country_trade + intermediate_trade
+    TIV_country_trade_breakdown = TIV_country_trade_breakdown + 
+      intermediate_trade_breakdown
+  }
+  
+  Country_ids = transport_ids %>% filter(iso3 == country_current)
+  
+  transport_output = 0
+  
+  for (i in Country_ids$transport_id){
+    i = as.numeric(i)
+    transport_sector_output = total_output[i,]
+    transport_output = transport_output + transport_sector_output
+  }
+  
+  TIV_country_transport = 0
+  TIV_country_transport_breakdown = 0
+  
+  for (i in Country_ids$transport_id){
+    i = as.numeric(i)
+    intermediate_transport = TIV[,i] * (total_output[i,]/transport_output)
+    intermediate_transport_breakdown = as.data.frame(
+      full_intensity_breakdown[,i] * (total_output[i,]/transport_output))
+    TIV_country_transport = TIV_country_transport + intermediate_transport
+    TIV_country_transport_breakdown = TIV_country_transport_breakdown + 
+      intermediate_transport_breakdown
+  }
+  
+  TIV_country_trade_rep = as.data.frame(rep(
+    TIV_country_trade,length(percent_trade)))
+  TIV_country_transport_rep = as.data.frame(rep(
+    TIV_country_transport,length(percent_transport)))
+  
+  TIV_PP = (t(TIV) * as.vector(percent_BP)) + 
+    (TIV_country_trade_rep * as.vector(percent_trade)) + 
+    (TIV_country_transport_rep * as.vector(percent_transport))
+  mapped_intensities = M %*% as.matrix(TIV_PP)
+  
+  TIV_country_trade_breakdown_rep = as.data.frame(rep(
+    TIV_country_trade_breakdown,length(percent_trade)))
+  TIV_country_transport_breakdown_rep = as.data.frame(rep(
+    TIV_country_transport_breakdown,length(percent_transport)))
+  
+  full_country_breakdown_PP = (t(full_intensity_breakdown) * as.vector(percent_BP)) + 
+    (t(TIV_country_trade_breakdown_rep) * as.vector(percent_trade)) + 
+    (t(TIV_country_transport_breakdown_rep) * as.vector(percent_transport))
+  mapped_intensities_breakdown = M %*% as.matrix(full_country_breakdown_PP)
+  
+  domestic = as.matrix(sum(mapped_intensities_breakdown[,
+                                                fd_and_t_ids[country_current,"T_start_id"]:
+                                                fd_and_t_ids[country_current,"T_end_id"]]))
+  foreign = as.matrix(sum(mapped_intensities_breakdown) - domestic)
+  
+  sector_breakdown = read.csv("../sector_breakdown.csv") %>% select(Index, Country, OECD)
+  mapped_intensities_breakdown_with_all_sectors = as.data.frame(cbind(
+    sector_breakdown, t(mapped_intensities_breakdown)))
+  
+  OECD_only = mapped_intensities_breakdown_with_all_sectors %>% filter(OECD == 1) 
+  OECD_mapped = OECD_only %>% select(-Index,-Country,-OECD)
+  
+  non_OECD_only = mapped_intensities_breakdown_with_all_sectors %>% filter(OECD == 0) 
+  non_OECD_mapped = non_OECD_only %>% select(-Index,-Country,-OECD)
+  
+  non_OECD_with_domestic = sum(non_OECD_mapped)
+  non_OECD = non_OECD_with_domestic - domestic
+  OECD = sum(OECD_mapped)
+  
+  Country = country_current
+  final_intensities = data.frame(Country, Year, mapped_intensities, 
+                          domestic, foreign, OECD, non_OECD)
+  final_intensities
+}
+
+for (i in Years) {
+  year_current = i
+  Technology_matrix = read.csv(paste0("../T", year_current, ".csv", sep=""), 
+                               header=F, row.names=NULL)
+  final_demand = read.csv(paste0("../FD", year_current, ".csv", sep=""), 
+                          header=F, row.names=NULL)
+  trade_margin_FD = read.csv(paste0("../Trade_Margin_FD_",year_current,".csv"), 
+                             header = F)
+  transport_margin_FD = read.csv(paste0("../Transport_Margin_FD_",year_current,".csv"), 
+                                 header = F)
+  taxes_FD = read.csv(paste0("../Taxes_FD_",year_current,".csv"), 
+                      header = F)
+  subsidies_FD = read.csv(paste0("../Subsidies_FD_",year_current,".csv"), 
+                          header = F)
+  final_demand_PP = final_demand + trade_margin_FD + 
+    transport_margin_FD + taxes_FD + subsidies_FD
+  total_output = as.matrix(rowSums(Technology_matrix) + rowSums(final_demand))
+  Satellite = read.csv(paste0("../Satellite", year_current, ".csv", sep=""), 
+                       header=F, row.names=NULL)[,1:14839] 
+  
+  CO2 = as.matrix(t(Satellite[2709,]))
+  
+    DIV = as.matrix(CO2/total_output)
+    DIV[is.na(DIV)]=0
+    
+    A = as.matrix(Technology_matrix) %*% diag(1/as.vector(total_output))
+    A[is.na(A)]=0
+
+    Leontief_inverse = solve(diag(dim(A)[1])-A)  
+    Leontief_inverse[is.na(Leontief_inverse)]=0
+
+  TIV = as.data.frame(as.vector(DIV) %*% Leontief_inverse)
+  
+  all_CO2 = t(TIV) * final_demand
+
+  full_intensity_breakdown = as.vector(DIV) * Leontief_inverse
+  
+  Year = year_current
+
+ for (j in Non_OECD_countries){
+    country_current = j
+    Concordance_matrix = t(read.csv(paste0(data_dir, "/for_cluster/concordance_matrix_",
+                                           country_current,".csv"), 
+                                  header = F))
+    final_intensities = Concordance_to_map_non_OECD(Concordance_matrix)
+    final_intensities = final_intensities %>% rename(LOCATION = "Country")
+    Fully_mapped_intensities_non_OECD = rbind(Fully_mapped_intensities_non_OECD, 
+                                              final_intensities)
+  }
+}
+
+# saveRDS(Fully_mapped_intensities_non_OECD, "../mapped_ints_non_OECD.rds")
+```
+
+Read in mapped intensities for the non-OECD countries, saved in the previous cluster code chunk. Calculate non-OECD health expenditure from World Bank data on gdp and health care/public health care percent of GDP.
+
+```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+
+# Read in non-OECD mapped intensities saved in previous code chunk:
+non_OECD = readRDS(paste0(data_dir, "mapped_ints_non_OECD.rds"))
+
+Mapped_intensities_non_OECD = non_OECD %>% 
+  rename(mapped_intensities = "rep.TIV_country_trade..length.percent_trade..")
+
+# Calculate health care expenditure for non-OECD countries using 
+# World Bank data on GDP (current USD), health care expenditure percent of GDP, 
+# and public health care expenditure percent of GDP:
+df_gdp_current_USD_non_OECD = read_excel(paste0(data_dir, "API_NY.GDP.MKTP.CD_DS2_en_excel_v2.xls"), 
+                     sheet = 1,
+                     skip = 3) %>% rename(Country.Name = "Country Name",
+                                          Country.Code = "Country Code",
+                                          Indicator.Name = "Indicator Name",
+                                          Indicator.Code = "Indicator Code") %>%
+  select(-Country.Name, -Indicator.Name, -Indicator.Code) %>%
+  gather(Year_string,gdp, -Country.Code) %>%
+  mutate(Year = strtoi(substr(Year_string, 1,5))) %>%
+  select(-Year_string) %>% 
+  rename(LOCATION = Country.Code) %>%
+  filter(Year > 1999, LOCATION %in% Non_OECD_countries)
+
+df_hexp_percent_of_GDP = read_excel(paste0(data_dir, "API_SH.XPD.TOTL.ZS_DS2_en_excel_v2.xls"), 
+                     sheet = 1,
+                     skip = 3) %>% rename(Country.Name = "Country Name",
+                                          Country.Code = "Country Code",
+                                          Indicator.Name = "Indicator Name",
+                                          Indicator.Code = "Indicator Code") %>%
+  select(-Country.Name, -Indicator.Name, -Indicator.Code) %>%
+  gather(Year_string,health_exp_percent_of_GDP, -Country.Code) %>%
+  mutate(Year = strtoi(substr(Year_string, 1,5))) %>%
+  select(-Year_string) %>% 
+  rename(LOCATION = Country.Code) %>%
+  filter(Year > 1999, LOCATION %in% Non_OECD_countries)
+
+df_public_hexp_percent_of_GDP = read_excel(paste0(data_dir, "API_SH.XPD.PUBL.ZS_DS2_en_excel_v2.xls"), 
+                     sheet = 1,
+                     skip = 3) %>% rename(Country.Name = "Country Name",
+                                          Country.Code = "Country Code",
+                                          Indicator.Name = "Indicator Name",
+                                          Indicator.Code = "Indicator Code") %>%
+  select(-Country.Name, -Indicator.Name, -Indicator.Code) %>%
+  gather(Year_string,public_health_exp_percent_of_GDP, -Country.Code) %>%
+  mutate(Year = strtoi(substr(Year_string, 1,5))) %>%
+  select(-Year_string) %>% 
+  rename(LOCATION = Country.Code) %>%
+  filter(Year > 1999, LOCATION %in% Non_OECD_countries)
+
+hexp_non_OECD = df_gdp_current_USD_non_OECD %>% 
+  left_join(df_hexp_percent_of_GDP, by = c("LOCATION", "Year")) %>% 
+  left_join(df_public_hexp_percent_of_GDP, by = c("LOCATION", "Year")) %>% 
+  filter(Year %in% Years) %>% 
+  mutate(hexp = gdp*(health_exp_percent_of_GDP/100), 
+         public_hexp = gdp*(public_health_exp_percent_of_GDP/100)) %>% 
+  mutate(investment = hexp*0.05, 
+    hexp_current_USD = hexp + (hexp * 0.05))
+```
+
+## Calculate health carbon footprints
+
+Join health care expenditure data with mapped intensities for both OECD and non-OECD countries, and calculate the health carbon footprint. 
+
+```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+
+# Join the OECD health care expenditure data with the 
+# mapped intensity data, by country, year, 
+# expenditure category, and financing scheme:
+df_hcf_OECD = hexp %>% 
+  left_join(Mapped_intensities_OECD, 
+            by = c('Financing.scheme','Provider','LOCATION','Year')) %>% 
+  rename(hexp_local_currency = "Value")
+
+# Multiply expenditures by intensities 
+# for each expenditure category and each year:
+df_hcf_OECD_summarised = as.data.frame(df_hcf_OECD %>% 
+      mutate(hexp_current_USD = hexp_current_USD*1000000) %>% 
+      mutate(Total_HCF = hexp_current_USD * (mapped_intensities/1000), 
+          Domestic_HCF = hexp_current_USD * (domestic/1000), 
+          Foreign_HCF = hexp_current_USD * (foreign/1000), 
+          OECD_HCF = hexp_current_USD * (OECD/1000), 
+          Non_OECD_HCF = hexp_current_USD * (non_OECD/1000)) %>% 
+  group_by(LOCATION, Year) %>%
+  summarise(hexp_current_USD = sum(hexp_current_USD),
+            hexp_local_currency = sum(hexp_local_currency),
+            Total_HCF = sum(Total_HCF),
+            Domestic_HCF = sum(Domestic_HCF),
+            Foreign_HCF = sum(Foreign_HCF),
+            OECD_HCF = sum(OECD_HCF),
+            Non_OECD_HCF = sum(Non_OECD_HCF)) %>% 
+    select(-hexp_local_currency))
+
+# Join non-OECD expenditure with mapped intensities:
+df_hcf_non_OECD = hexp_non_OECD %>% 
+  left_join(Mapped_intensities_non_OECD, by = c("LOCATION","Year"))
+
+# Multiply expenditures by intensities:
+df_hcf_non_OECD_summarised = as.data.frame(df_hcf_non_OECD %>% 
+  mutate(Total_HCF = hexp_current_USD * (mapped_intensities/1000), 
+        Domestic_HCF = hexp_current_USD * (domestic/1000), 
+        Foreign_HCF = hexp_current_USD * (foreign/1000), 
+        OECD_HCF = hexp_current_USD * (OECD/1000), 
+        Non_OECD_HCF = hexp_current_USD * (non_OECD/1000)) %>% 
+  select(LOCATION, Year, hexp_current_USD, 
+        Total_HCF, Domestic_HCF, Foreign_HCF, 
+        OECD_HCF, Non_OECD_HCF))
+
+```
+
+## Create master dataframe
+
+Create master dataframe ('df_hcf') for building figures and tables. This requires extra data files including the national carbon footprints of each country calculated with Eora, World Bank population data, World Bank gdp data both in constant 2010 USD and in constant 2011 USD purchasing power parity (PPP), EDGAR CO2 data and IEA total final energy consumption (TFC) data. It also requires expressing health care expenditure (current and investment) in constant 2010 prices. These are each joined to the main dataframe after they are loaded and cleaned appropriately. 
+
+```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+
+# Create master dataframe from which to build tables
+# and figures by joining OECD and non-OECD (this is 
+# summarised only, as non-OECD health care expenditure
+# is not broken down by expenditure category):
+df_hcf = df_hcf_OECD_summarised %>% bind_rows(df_hcf_non_OECD_summarised) %>% 
+  select(-Foreign_HCF)
+
+# Add financing scheme columns:
+
+## OECD:
+
+df_hcf_OECD_financing = as.data.frame(df_hcf_OECD %>% 
+    mutate(Total_HCF = (hexp_current_USD*1000000) * (mapped_intensities/1000), 
+        Domestic_HCF = (hexp_current_USD*1000000) * (domestic/1000), 
+        Foreign_HCF = (hexp_current_USD*1000000) * (foreign/1000), 
+        OECD_HCF = (hexp_current_USD*1000000) * (OECD/1000), 
+        Non_OECD_HCF = (hexp_current_USD*1000000) * (non_OECD/1000)) %>% 
+  group_by(LOCATION, Year, Financing.scheme) %>%
+  summarise(Total_HCF = sum(Total_HCF)))
+
+df_hcf_OECD_financing = spread(df_hcf_OECD_financing, Financing.scheme, 
+                              Total_HCF) %>% 
+  rename(Public_HCF = "Government/compulsory schemes", 
+         Private_HCF =  "Voluntary schemes/household out-of-pocket payments", 
+         Investment_HCF = "All domestic providers")
+
+## non-OECD:
+
+Add_private = df_hcf_non_OECD %>% 
+  mutate(private_hexp = hexp - public_hexp) 
+                                                                   
+df_hcf_non_OECD_financing = Add_private %>% 
+  mutate(Public_HCF = public_hexp * (mapped_intensities/1000), 
+         Private_HCF = private_hexp * (mapped_intensities/1000), 
+         Investment_HCF = investment * (mapped_intensities/1000)) %>% 
+  select(LOCATION, Year, Investment_HCF, Public_HCF, Private_HCF)
+
+## Both OECD and non-OECD:
+
+df_hcf_financing = df_hcf_OECD_financing %>% bind_rows(df_hcf_non_OECD_financing)
+
+df_hcf = df_hcf %>% left_join(df_hcf_financing, by = c('LOCATION','Year'))
+
+# Add provider columns (OECD only):
+df_hcf_OECD_providers = as.data.frame(df_hcf_OECD %>% 
+    mutate(hexp_current_USD = hexp_current_USD*1000000) %>% 
+  mutate(Total_HCF = hexp_current_USD * (mapped_intensities/1000), 
+    Domestic_HCF = hexp_current_USD * (domestic/1000), 
+    Foreign_HCF = hexp_current_USD * (foreign/1000), 
+    OECD_HCF = hexp_current_USD * (OECD/1000), 
+    Non_OECD_HCF = hexp_current_USD * (non_OECD/1000))) %>% 
+  group_by(LOCATION, Year, Provider) %>%
+  summarise(Total_HCF = sum(Total_HCF))
+
+df_hcf_OECD_providers = spread(df_hcf_OECD_providers, Provider, Total_HCF) %>% 
+  rename("Ambulatory" = "Providers of ambulatory health care",
+  "Ancillary" = "Providers of ancillary services",
+  "Administration" = "Providers of health care system administration and financing",
+  "Preventive" = "Providers of preventive care", 
+  "Long-term" = "Residential long-term care facilities",
+  "Medical retailers" = "Retailers and other providers of medical goods",
+  "Investment" = "Gross fixed capital formation (all types of assets)",
+   "Other_roe" = "Rest of the economy",
+   "Other_row" = "Rest of the world")
+
+df_hcf = df_hcf %>% left_join(df_hcf_OECD_providers, by = c('LOCATION','Year'))
+
+```
+
+Calculate national carbon footprints using the full version of Eora. This uses the footprints calculated within the cluster code for each year ''all_CO2_', year_current, '.rds'', looping through them, extracting only the countries in our sample and calculating each national footprint for each year. This code chunk is also set to 'eval = FALSE' with the saved national footprints loaded locally in the following code chunk.  
+
+```{r, warning = FALSE, message = FALSE, eval = FALSE}
+
+# Figure 1a and Table 1 require calculating the 
+# health care proportion of national footprints. This 
+# is the code for calculating the national footprints 
+# on the cluster computer with the saved totals read 
+# in on the following code chunk:
+All_countries = c("USA","GBR","JPN","ESP", "AUS","CAN","DEU","KOR","TUR","AUT",
+              "FRA","ITA","MEX", "BEL", "CHE", "CZE", "DNK", "EST", "FIN", "GRC", "HUN", 
+              "IRL", "ISL", "ISR", "LUX", "LVA", "NLD", "NOR", "NZL", "POL", "PRT", "SVK",
+              "SVN", "SWE", "CHN","IND")
+
+# Read in created .csv with Eora final demand index start ids 
+# and T table index ids, as well as trade sector ids 
+# and transport sector ids for every country:
+fd_and_t_ids = read.csv(paste0(data_dir, "fd_and_t_ids.csv"), header = T) 
+row.names(fd_and_t_ids) = fd_and_t_ids$iso3
+
+total_footprints_CO2 = NULL
+
+for (i in Years){
+  year_current = i
+  df_data = as.data.frame(readRDS(paste0("../all_CO2_",year_current,".rds")))
+  df_data_summed = as.data.frame(colSums(df_data))
+  fd_column_id = seq(1,1140,1)
+  df_data_with_ids = cbind(fd_column_id, df_data_summed) 
+  country_fd_ids = fd_and_t_ids %>% filter(iso3 %in% All_countries)
+  Year = rep(year_current, 216)
+  columns_expanded = data.frame(iso3 = rep(country_fd_ids$iso3, each=6), 
+                  fd_column_id = rep(country_fd_ids$fd_start_id, each=6)) %>% 
+  mutate(fd_column = rep(seq(from=0,to=5,by=1), nrow(country_fd_ids)), 
+         fd_column_id = fd_column_id+fd_column) 
+  columns_expanded = cbind(columns_expanded, Year)
+  df_footprints_CO2 = columns_expanded %>% 
+    left_join(df_data_with_ids, by = "fd_column_id") %>% 
+    rename(Indirect_CO2_footprint_Gg = "colSums(df_data)") %>% 
+    group_by(iso3, Year) %>% 
+    summarise(Indirect_CO2_footprint_Gg = sum(Indirect_CO2_footprint_Gg))
+  total_footprints_CO2 = rbind(total_footprints_CO2, df_footprints_CO2)
+}
+
+national_CO2_footprints = total_footprints_CO2 %>% 
+  rename(LOCATION = "iso3", 
+         National_indirect_CO2_footprint_Gg = "Indirect_CO2_footprint_Gg")
+
+# saveRDS(national_CO2_footprints, "../national_CO2_footprints.rds")
+
+```
+
+Join saved national footprints and World Bank population data to 'df_hcf'. 
+
+```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+
+# Read in saved national footprints calculated in previous code chunk:
+national_footprints = readRDS(paste0(data_dir, "national_CO2_footprints.rds")) %>% rename(National_CF = National_indirect_CO2_footprint_Gg)
+
+df_hcf = df_hcf %>% left_join(national_footprints, by = c('LOCATION', 'Year'))
+
+# Read in population data from the World Bank:
+df_population = read_excel(paste0(data_dir, "API_SP.POP.TOTL_DS2_en_excel_v2_9985116.xls"), 
+                     sheet = 1,
+                     skip = 3) %>% rename(Country.Name = "Country Name",
+                                          Country.Code = "Country Code",
+                                          Indicator.Name = "Indicator Name",
+                                          Indicator.Code = "Indicator Code") %>%
+  select(-Country.Name, -Indicator.Name, -Indicator.Code) %>%
+  gather(Year_string, population, -Country.Code) %>%
+  mutate(Year = strtoi(substr(Year_string, 1,5))) %>%
+  select(-Year_string) %>% 
+  rename(LOCATION = Country.Code) %>%
+  filter(Year > 1999)
+
+df_hcf = df_hcf %>% left_join(df_population, by = c('LOCATION','Year'))
+
+```
+
+Calculate health expenditure data in the same way as before, but now select for 'Constant prices, OECD base year.' The OECD base year is 2010. Join to 'df_hcf'.
+
+```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+
+# Get health care expenditure in constant 2010 USD for use in both Figure 3 
+# and panel regression. Same procedure as beginning but now filter OECD 
+# current and investment health care expenditure for constant prices 2010 
+# base year before converting from local currency to USD. Use World Bank GDP data
+# in constant 2010 USD to calculate non-OECD health care expenditure
+
+# OECD:
+hexp_current_const = read.csv(paste0(data_dir, 
+                                              "OECD_healthexpenditures.csv")) %>% 
+  filter(Measure == "Constant prices, OECD base year", 
+         Function == "Current expenditure on health (all functions)", 
+         !(Financing.scheme == "All financing schemes"), 
+         !(Provider == "All providers")) %>%
+  select(Financing.scheme, Provider, Measure, LOCATION, Year, Unit, Value) %>%
+    filter(!(Year %in% c("2015","2016")), !(LOCATION=="IRL" & Year%in%c(2000,2001,2002,2003)) & 
+                          !(LOCATION=="KOR" & Year==2000) &
+                          !(LOCATION=="SVK" & Year%in%c(2000,2001,2002,2003)))
+
+hexp_current_const_summarised = hexp_current_const %>% 
+  group_by(LOCATION, Year) %>% summarise(Value = sum(Value))
+
+h_inv_const_incomplete = read.csv(paste0(data_dir, 
+                                            "OECD_healthinvestment.csv")) %>% 
+  filter(Measure == "Constant prices, OECD base year") %>% 
+  rename(Financing.scheme = "Provider", Provider = "Type.of.asset") %>% 
+  select(Financing.scheme, Provider, Measure, LOCATION, Year, Unit, Value)
+
+h_inv_const_interpolated = hexp_current_const_summarised %>% 
+  left_join(h_inv_const_incomplete, by = c('LOCATION','Year')) %>%
+   mutate(proportion_investment = Value.y/Value.x) 
+
+h_inv_const_proportions = h_inv_const_interpolated %>% 
+group_by(LOCATION) %>% summarise_at(vars(proportion_investment), funs(mean(., na.rm=TRUE))) %>% 
+  mutate(proportion_investment = ifelse(is.na(proportion_investment), 0.05, proportion_investment))
+
+h_inv_const = h_inv_const_interpolated %>% 
+  left_join(h_inv_const_proportions, by = "LOCATION") %>% 
+  mutate(Value = ifelse(is.na(proportion_investment.x),Value.x*proportion_investment.y,Value.y)) %>% 
+  select(LOCATION, Year, Financing.scheme, Provider, Measure, Unit, Value) %>% 
+  mutate(Unit = ifelse(LOCATION %in% c("AUT","BEL","DEU","ESP","EST","FIN",
+                                       "FRA","GRC","IRL","ITA","LUX","LVA",
+                                       "NLD","PRT","SVK","SVN"), "Euro", 
+                ifelse(LOCATION == "AUS", "Australian Dollar",
+                ifelse(LOCATION == "CAN", "Canadian Dollar",
+                ifelse(LOCATION == "CHE", "Swiss Franc",
+                ifelse(LOCATION == "CZE", "Czech Koruna",
+                ifelse(LOCATION == "DNK", "Danish Krone",
+                ifelse(LOCATION == "GBR", "Pound Sterling",
+                ifelse(LOCATION == "HUN", "Forint",
+                ifelse(LOCATION == "ISL", "Iceland Krona",
+                ifelse(LOCATION == "ISR", "New Israeli Sheqel",
+                ifelse(LOCATION == "JPN", "Yen",
+                ifelse(LOCATION == "KOR", "Won",
+                ifelse(LOCATION == "MEX", "Mexican Peso",
+                ifelse(LOCATION == "NOR", "Norwegian Krone",
+                ifelse(LOCATION == "NZL", "New Zealand Dollar",
+                ifelse(LOCATION == "POL", "Zloty",
+                ifelse(LOCATION == "SWE", "Swedish Krona",
+                ifelse(LOCATION == "TUR", "Turkish Lira",
+                ifelse(LOCATION == "USA", "US Dollar", Unit)))))))))))))))))))) %>% 
+  ungroup() %>% 
+  fill(Financing.scheme, Provider, Measure) 
+
+hexp_const_w_inv= hexp_current_const %>% 
+  bind_rows(h_inv_const)
+
+ex_rates = read.csv(paste0(data_dir, 
+                                     "IMF_exchange_rates_annual.csv"), header = T)
+
+hexp_const = hexp_const_w_inv %>% 
+  left_join(ex_rates, by = c("Year", "Unit")) %>% 
+  mutate(hexp_constant_2010_USD = Value / EX_rate) %>%
+  group_by(LOCATION, Year) %>% 
+  summarise(hexp_constant_2010_USD = sum(hexp_constant_2010_USD))
+
+# non-OECD:
+df_gdp_const = read_excel(paste0(data_dir, "API_NY.GDP.MKTP.KD_DS2_en_excel_v2_9984757.xls"), 
+                     sheet = 1,
+                     skip = 3) %>% rename(Country.Name = "Country Name",
+                                          Country.Code = "Country Code",
+                                          Indicator.Name = "Indicator Name",
+                                          Indicator.Code = "Indicator Code") %>%
+  select(-Country.Name, -Indicator.Name, -Indicator.Code) %>%
+  gather(Year_string,gdp_const, -Country.Code) %>%
+  mutate(Year = strtoi(substr(Year_string, 1,5))) %>%
+  select(-Year_string) %>% 
+  rename(LOCATION = Country.Code) %>%
+  filter(Year > 1999, LOCATION %in% Non_OECD_countries)
+
+df_hexp_percent_of_GDP = read_excel(paste0(data_dir, "API_SH.XPD.TOTL.ZS_DS2_en_excel_v2.xls"), 
+                     sheet = 1,
+                     skip = 3) %>% rename(Country.Name = "Country Name",
+                                          Country.Code = "Country Code",
+                                          Indicator.Name = "Indicator Name",
+                                          Indicator.Code = "Indicator Code") %>%
+  select(-Country.Name, -Indicator.Name, -Indicator.Code) %>%
+  gather(Year_string,health_exp_percent_of_GDP, -Country.Code) %>%
+  mutate(Year = strtoi(substr(Year_string, 1,5))) %>%
+  select(-Year_string) %>% 
+  rename(LOCATION = Country.Code) %>%
+  filter(Year > 1999, LOCATION %in% Non_OECD_countries)
+
+df_public_hexp_percent_of_GDP = read_excel(paste0(data_dir, "API_SH.XPD.PUBL.ZS_DS2_en_excel_v2.xls"), 
+                     sheet = 1,
+                     skip = 3) %>% rename(Country.Name = "Country Name",
+                                          Country.Code = "Country Code",
+                                          Indicator.Name = "Indicator Name",
+                                          Indicator.Code = "Indicator Code") %>%
+  select(-Country.Name, -Indicator.Name, -Indicator.Code) %>%
+  gather(Year_string,public_health_exp_percent_of_GDP, -Country.Code) %>%
+  mutate(Year = strtoi(substr(Year_string, 1,5))) %>%
+  select(-Year_string) %>% 
+  rename(LOCATION = Country.Code) %>%
+  filter(Year > 1999, LOCATION %in% Non_OECD_countries)
+
+Non_OECD_health_expenditure_constant_2010_USD = df_gdp_const %>% 
+  left_join(df_hexp_percent_of_GDP, by = c("LOCATION", "Year")) %>% 
+  left_join(df_public_hexp_percent_of_GDP, by = c("LOCATION", "Year")) %>% 
+  filter(Year %in% Years) %>% 
+  mutate(hexp_const = gdp_const*(health_exp_percent_of_GDP/100), 
+   public_hexp_const = gdp_const*(public_health_exp_percent_of_GDP/100)) %>% 
+  mutate(investment_const = hexp_const*0.05, 
+    hexp_constant_2010_USD = hexp_const + (hexp_const * 0.05)) %>% 
+  mutate(hexp_constant_2010_USD = hexp_constant_2010_USD*0.000001) %>% 
+  select(LOCATION, Year, hexp_constant_2010_USD)
+
+# Bind OECD and non-OECD
+
+hexp_const = hexp_const %>% 
+  bind_rows(Non_OECD_health_expenditure_constant_2010_USD)
+
+# Join to 'df_hcf'
+
+df_hcf = df_hcf %>% left_join(hexp_const, 
+                                       by = c("LOCATION","Year"))
+
+
+```
+
+Read in World Bank GDP in constant 2010 USD and constant 2011 USD PPP. Join both to 'df_hcf'.
+
+```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+
+# Read in constant 2010 USD GDP required to calculate fractions to apply to GDP PPP:
+df_gdp_const = read_excel(paste0(data_dir, "API_NY.GDP.MKTP.KD_DS2_en_excel_v2_9984757.xls"),
+                     sheet = 1,
+                     skip = 3) %>% rename(Country.Name = "Country Name",
+                                          Country.Code = "Country Code",
+                                          Indicator.Name = "Indicator Name",
+                                          Indicator.Code = "Indicator Code") %>%
+  select(-Country.Name, -Indicator.Name, -Indicator.Code) %>%
+  gather(Year_string, gdp_const, -Country.Code) %>%
+  mutate(Year = strtoi(substr(Year_string, 1,5))) %>%
+  select(-Year_string) %>%
+  rename(LOCATION = Country.Code) %>%
+  filter(Year > 1999)
+
+df_hcf = df_hcf %>% left_join(df_gdp_const, by = c("LOCATION","Year"))
+
+# Read in GDP PPP (constant 2011 USD PPP) to calc fraction of health expenditure per GDP PPP:
+df_gdp_const_ppp = read_excel(paste0(data_dir, "API_NY.GDP.MKTP.PP.KD_DS2_en_excel_v2_9987143.xls"), 
+                     sheet = 1,
+                     skip = 3) %>% rename(Country.Name = "Country Name",
+                                          Country.Code = "Country Code",
+                                          Indicator.Name = "Indicator Name",
+                                          Indicator.Code = "Indicator Code") %>%
+  select(-Country.Name, -Indicator.Name, -Indicator.Code) %>%
+  gather(Year_string, gdp_const_ppp, -Country.Code) %>%
+  mutate(Year = strtoi(substr(Year_string, 1,5))) %>%
+  select(-Year_string) %>% 
+  rename(LOCATION = Country.Code) %>%
+  filter(Year > 1999)
+
+df_hcf = df_hcf %>% left_join(df_gdp_const_ppp, by = c("LOCATION","Year"))
+
+
+```
+
+Read in EDGAR direct CO2 data. They are disaggregated into five sources. Create a variable that is the total minus CO2 from non-combustion. Read in IEA energy data on total final consumption (TFC). Join both to 'df_hcf' and save 'df_hcf' to the 'data' folder. 
+
+```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+
+All_countries_EDGAR_codes = c("USA","GBR","JPN","ESP_AND", "AUS","CAN","DEU","KOR","TUR","AUT",
+              "FRA_MCO","ITA_SMR_VAT","MEX", "BEL", "CHE_LIE", "CZE", "DNK", "EST", 
+              "FIN", "GRC", "HUN", "IRL", "ISL", "ISR_PSE", "LUX", "LVA", "NLD", 
+              "NOR", "NZL", "POL", "PRT", "SVK",
+              "SVN", "SWE", "CHN","IND")
+
+# Read in EDGAR direct CO2 data
+# and break up into component sectors, creating a total without 
+# non-combustion included:
+co2_edgar_all = read.csv(paste0(data_dir, "EDGAR_direct_CO2.csv")) %>% 
+  filter(ISO_CODE %in% All_countries_EDGAR_codes) %>% 
+  select(ISO_CODE, sector, substance, X2000:X2014)
+
+power_industry = co2_edgar_all %>% filter(sector == "Power Industry") %>% 
+  select(-sector,-substance) %>%
+  gather(variable, power_industry, -ISO_CODE)
+
+transport = co2_edgar_all %>% filter(sector == "Transport") %>% 
+  select(-sector,-substance) %>%
+  gather(variable, transport, -ISO_CODE)
+
+other_ind_combustion = co2_edgar_all %>% 
+  filter(sector == "Other industrial combustion") %>% 
+  select(-sector,-substance) %>%
+  gather(variable, other_ind_combustion, -ISO_CODE)
+
+non_combustion = co2_edgar_all %>% filter(sector == "Non-combustion") %>% 
+  select(-sector,-substance) %>%
+  gather(variable, non_combustion, -ISO_CODE)
+
+buildings = co2_edgar_all %>% filter(sector == "Buildings") %>% 
+  select(-sector,-substance) %>%
+  gather(variable, buildings, -ISO_CODE)
+
+all = power_industry %>% 
+  left_join(transport, by = c("ISO_CODE", "variable")) %>% 
+  left_join(other_ind_combustion, by = c("ISO_CODE", "variable")) %>% 
+  left_join(non_combustion, by = c("ISO_CODE", "variable")) %>% 
+  left_join(buildings, by = c("ISO_CODE", "variable"))
+
+CO2_totals = all %>% mutate(Total_wo_non_combustion = power_industry + transport + 
+                                  other_ind_combustion + buildings, 
+                                Total_all = power_industry + transport + 
+                                  other_ind_combustion + non_combustion + buildings) %>%
+  mutate(ISO_CODE = fct_recode(ISO_CODE, "ITA" = "ITA_SMR_VAT",
+                               "FRA" = "FRA_MCO",
+                               "ISR" = "ISR_PSE",
+                               "ESP" = "ESP_AND",
+                               "CHE" = "CHE_LIE"),
+         variable = recode(variable, "X2000" = 2000,
+                               "X2001" = 2001,
+                               "X2002" = 2002,
+                               "X2003" = 2003,
+                               "X2004" = 2004,
+                               "X2005" = 2005,
+                               "X2006" = 2006,
+                               "X2007" = 2007,
+                               "X2008" = 2008,
+                               "X2009" = 2009,
+                               "X2010" = 2010,
+                               "X2011" = 2011,
+                               "X2012" = 2012,
+                               "X2013" = 2013,
+                               "X2014" = 2014)) %>%
+  rename(LOCATION = ISO_CODE, Year = variable,
+         CO2_power_industry = power_industry, 
+         CO2_transport = transport,
+         CO2_other_ind_combustion = other_ind_combustion,
+         CO2_non_combustion = non_combustion,
+         CO2_buildings = buildings,
+         Total_CO2_wo_non_combustion = Total_wo_non_combustion,
+         Total_CO2_all = Total_all) 
+
+df_hcf = df_hcf %>% left_join(CO2_totals, by = c("LOCATION","Year"))
+
+# Read in IEA TFC data: 
+energy_iea = read.csv(paste0(data_dir, "/IEA_energy.csv")) %>%
+  filter(year %in% Years) %>% rename(Year = year) %>%
+  select(LOCATION = iso3, Year, TFC_Mtoe) 
+
+df_hcf = df_hcf %>% left_join(energy_iea, by = c("LOCATION","Year"))
+
+# save main data frame 'df_hcf' to 'data' sub-folder:
+saveRDS(df_hcf, paste0(data_dir, "df_hcf.rds"))
+write_csv(df_hcf, paste0(data_dir, "df_hcf.csv"))
+```
+
+'df_hcf' can now be loaded from the 'data' folder when 'params: analyze:' is set to 'FALSE.' Only 'df_hcf' is used to create the figures and tables from the main manuscript. 
+
+```{r, warning = FALSE, message = FALSE, eval = params$visualize}
+
+df_hcf = readRDS(paste0(data_dir, "df_hcf.rds"))
+
+```
+
+
+
+# Figures and Tables in Main Manuscript
+## Figure 1
+
+Health carbon footprint (HCF) as percentage of national carbon footprint (CF) grouped by regional source (A) and health carbon footprint per capita grouped by financing scheme (B) in 2014 for all available countries in 2014.
+
+```{r , cache=TRUE, warning=F, message=F, fig.width = 20*0.393701, fig.height = 16*0.393701, eval = params$visualize}
+
+# Data for figure 1a
+
+# Calculate health care's 
+# proportion of the national footprint by source region (total, domestic, 
+# OECD, and non-OECD). Filter for the year 2014:
+pdat_f1a = df_hcf %>% 
+mutate(HCF_share_CF = (Total_HCF/National_CF)*100, 
+  Domestic_HCF_share_CF = (Domestic_HCF/National_CF)*100, 
+  OECD_HCF_share_CF = (OECD_HCF/National_CF)*100, 
+  non_OECD_HCF_share_CF = (Non_OECD_HCF/National_CF)*100) %>% 
+  select(LOCATION, Year, Domestic_HCF_share_CF, OECD_HCF_share_CF, non_OECD_HCF_share_CF) %>% 
+  gather(Source.region,value,Domestic_HCF_share_CF:non_OECD_HCF_share_CF) %>%
+  filter(Year == "2014")
+
+# Data for figure 1b
+
+# Calculate health carbon 
+# footprint per capita by financing scheme (total, public, private, and
+# investment). Filter for the year 2014:
+pdat_f1b = df_hcf %>% 
+  mutate(HCF_pc = (Total_HCF*1000)/population,
+         All_Investment = (Investment_HCF*1000)/population,
+         Government = (Public_HCF*1000)/population,
+         Private = (Private_HCF*1000)/population) %>%
+  select(LOCATION, Year, All_Investment, Private, Government) %>% 
+  gather(Financing.scheme,HCF_pc,All_Investment:Government) %>%
+  filter(Year == "2014")
+
+# Summarise 'pdat_f1a':
+share_summary = pdat_f1a %>% 
+  group_by(LOCATION) %>%
+  summarise(value = sum(value)) %>%
+  mutate(LOCATION = fct_reorder(LOCATION, value))
+
+# Summarise 'pdat_f1b':
+cf_summary = pdat_f1b %>% 
+  group_by(LOCATION) %>%
+  summarise(value = sum(HCF_pc))
+
+# Reorder factors by total share HCF:
+pdat_f1a$LOCATION = factor(pdat_f1a$LOCATION, levels = levels(share_summary$LOCATION)) 
+
+# Reorder factors by total share HCF:
+pdat_f1b$LOCATION = factor(pdat_f1b$LOCATION, levels = levels(share_summary$LOCATION)) 
+
+# Plot Figure 1A:
+p1 = ggplot(pdat_f1a, aes(y=value, x=LOCATION, fill=forcats::fct_rev(Source.region))) +
+  geom_col() +
+  geom_hline(yintercept = mean(share_summary$value), linetype="dashed") +
+  annotate("text", 
+           x = 5, 
+           y = mean(share_summary$value)-mean(share_summary$value)*0.05, 
+           label = "Mean", angle = 90) +
+  scale_fill_manual(values = colorvalues[2:4],
+                    name = "Source Region", 
+                    labels = c("OECD", "non-OECD", "Domestic")) +
+  
+  guides(fill = guide_legend(reverse=T)) + 
+  coord_flip() +
+  labs(x="", y="% HCF of total national CF") +
+  theme_minimal() +
+  theme(legend.position=c(0.869,0.17),
+        axis.text = element_text(size=12),
+        axis.title = element_text(size=12),
+        legend.text=element_text(size=12),
+        legend.title = element_text(size=13))
+
+# Plot Figure 1B:
+p2 = ggplot(pdat_f1b, aes(y=HCF_pc, 
+                          x=LOCATION, fill=forcats::fct_rev(Financing.scheme))) +
+  geom_col() +
+  geom_hline(yintercept = mean(cf_summary$value), linetype="dashed") +
+  annotate("text", 
+           x = 5, 
+           y = mean(cf_summary$value)-mean(cf_summary$value)*0.09, 
+           label = "Mean", angle = 90) +
+  scale_fill_manual(values = colorvalues[2:4],
+                    name = "Financing", 
+                    labels = c("Private", "Public", "Investment")) +
+  guides(fill = guide_legend(reverse=T)) + 
+  coord_flip() +
+  labs(x="", y="HCF (tons per capita)") +
+  theme_minimal() +
+  theme(legend.position=c(0.78,0.18),
+        axis.text = element_text(size=12),
+        axis.title = element_text(size=12),
+        legend.text=element_text(size=12),
+        legend.title = element_text(size=13))
+
+ggarrange(p1, p2, 
+          labels = c("a", "b"),
+          ncol = 2, nrow = 1)
+
+ggsave(paste0(out_dir_figures, "figure_1.pdf"), width = 20, height = 16, units = "cm")
+ggsave(paste0(out_dir_figures, "figure_1.png"), width = 20, height = 16, units = "cm", 
+ dpi=250)
+
+```
+
+## Table 1
+
+Health carbon footprints (HCF) in 2014 in absolute terms, per capita and as percentage of the national carbon footprint (CF). Red text indicates values above the sample mean. In the main manuscript, Israel and New Zealand are listed at the bottom of table 1 with the last year where health expenditures were available.
+
+```{r results='asis', cache=TRUE, message=FALSE, warning=FALSE, eval = params$visualize}
+
+# Calculate the total health carbon footprint in Mt, 
+# the health carbon footprint per capita, 
+# and the proportion of the national footprint:
+pdat_table1 = df_hcf %>% 
+  filter(Year == "2014") %>%
+mutate(LOCATION = as.factor(LOCATION),
+  HCF = Total_HCF*0.001, # Mt CO2
+  HCF_pc = (Total_HCF*1000)/population, # HCF/cap
+  HCF_share_CF = (Total_HCF/National_CF)*100) %>% # % of national CF
+  select(LOCATION,HCF,HCF_pc,HCF_share_CF) %>% 
+  arrange(LOCATION)
+
+# Write and save html table (table 1):
+pdat_table1 %>%
+  mutate(
+    Country = LOCATION,
+    HCF = cell_spec(round(HCF, 1), 
+                    color = ifelse(HCF > mean(HCF), "red", "black"), 
+                    align = "r"),
+    HCF_pc = cell_spec(round(HCF_pc, 2), 
+                    color = ifelse(HCF_pc > mean(HCF_pc), "red", "black"), 
+                    align = "r"),
+    HCF_share_CF = cell_spec(round(HCF_share_CF, 1), 
+                    color = ifelse(HCF_share_CF > mean(HCF_share_CF), "red", "black"), 
+                    align = "r")
+  ) %>%
+  select(Country, HCF, HCF_pc, HCF_share_CF) %>%
+  kable(format="html",escape = F, 
+    col.names = c("Country", "HCF (Mt)", "HCF/cap (tCO2/cap)", "Share of CF (p)")) %>%
+  kable_styling(c("striped", "condensed"), full_width = F) %>%
+  cat(., file = paste0(out_dir_figures, "/table1.html"))
+
+```
+
+```{r results='asis', cache=TRUE, message=FALSE, warning=FALSE, eval = params$visualize}
+
+# Write latex table (table 1):
+pdat_table1 %>%
+  mutate(
+    Country = LOCATION,
+    HCF = cell_spec(round(HCF, 1), "latex",
+                    color = ifelse(HCF > mean(HCF), "red", "black"), 
+                    align = "r"),
+    HCF_pc = cell_spec(round(HCF_pc, 2), "latex",
+                    color = ifelse(HCF_pc > mean(HCF_pc), "red", "black"), 
+                    align = "r"),
+    HCF_share_CF = cell_spec(round(HCF_share_CF, 1), "latex",
+                    color = ifelse(HCF_share_CF > mean(HCF_share_CF), "red", "black"), 
+                    align = "r")
+  ) %>%
+  select(Country, HCF, HCF_pc, HCF_share_CF) %>%
+  kable(format="markdown",escape = F, 
+    col.names = c("Country", "HCF (Mt)", "HCF/cap (tCO2/cap)", "Share of CF (p)")) %>%
+  kable_styling(c("striped", "condensed"), full_width = F) 
+
+```
+
+
+## Figure 2
+
+Relative shares of health carbon footprint attributable to OECD expenditure categories for entire country sample in 2014.
+
+```{r cache=TRUE, message=FALSE, warning=FALSE, fig.width = 15*0.393701, fig.height = 6*0.393701, eval = params$visualize}
+
+# Select expenditure provider categories for OECD countries only 
+# and the year 2014. Calculate health carbon 
+# footprint per capita by expenditure category:
+pdat_f2 = df_hcf %>%
+  select(LOCATION, Year, population, Investment:"Medical retailers") %>% 
+  gather(Provider,HCF,Investment:"Medical retailers") %>%
+  filter(Year == "2014", !(LOCATION %in% c("CHN","IND"))) %>%
+  mutate(HCF_pc = (HCF*1000)/population) %>%
+  select(LOCATION, Year, Provider,HCF_pc) %>%
+  group_by(LOCATION) %>%
+  drop_na() %>%
+  mutate(fraction = HCF_pc/sum(HCF_pc)*100) %>%
+  ungroup() %>%
+  mutate(Provider = fct_recode(Provider, "Ambulatory" = "Ambulatory",
+                               "Ancillary" = "Ancillary",
+                               "Administration" = "Administration",
+                               "Preventive" = "Preventive", 
+                               "Long-term" = "Long-term",
+                               "Medical retailers" = "Medical retailers",
+                               "Investment" = "Investment",
+                               "Other" = "Other_roe",
+                               "Other" = "Other_row")) %>%
+  group_by(LOCATION, Year, Provider) %>%
+  summarise_all(sum)
+
+
+# Calculate mean and standard deviation of HCF/capita by OECD expenditure category:
+pdat_f2_summary = pdat_f2 %>%
+  group_by(Provider) %>%
+  summarise(mean.fraction = mean(fraction, na.rm = TRUE),
+            sd.fraction = sd(fraction, na.rm = TRUE),
+            n.fraction = n()) %>%
+  mutate(se.fraction = sd.fraction / sqrt(n.fraction),
+    lower.ci.fraction = mean.fraction - qt(1 - (0.05 / 2), n.fraction - 1) * se.fraction,
+    upper.ci.fraction = mean.fraction + qt(1 - (0.05 / 2), n.fraction - 1) * se.fraction) %>%
+  mutate(Provider = fct_reorder(Provider, mean.fraction, desc=T))
+
+pdat_f2$Provider = factor(pdat_f2$Provider, levels = levels(pdat_f2_summary$Provider))
+
+min.mean.sd.max <- function(x) {
+  r <- c(min(x), mean(x) - sd(x), mean(x), mean(x) + sd(x), max(x))
+  names(r) <- c("ymin", "lower", "middle", "upper", "ymax")
+  r
+}
+
+# Plot Figure 2:
+p2 = ggplot(pdat_f2, aes(y=fraction, x=Provider)) +
+  stat_summary(fun.data = min.mean.sd.max, geom = "boxplot") +
+  geom_point(alpha=0.3, color=colorvalues[4]) +
+  coord_flip() +
+  labs(x="", y="% of HCF") +
+  theme_minimal() +
+  theme(axis.text = element_text(size=13),
+        axis.title = element_text(size=13),
+        legend.text=element_text(size=12),
+        legend.title = element_text(size=13)) 
+
+
+ggsave(paste0(out_dir_figures, "figure_2.pdf"), width = 15, height = 6, units = "cm")
+ggsave(paste0(out_dir_figures, "figure_2.png"), width = 15, height = 6, units = "cm", 
+ dpi=250)
+
+
+p2
+```
+
+## Figure 3
+
+Development of per capita health care footprint (HCF/cap), health expenditures (const. 2011 int. $)/cap and CO2-intensity of health care for the entire country sample between 2000 and 2014 normalized by country means to illustrate trends on a common axis. Gaps in time series reflect data availability in the OECD health statistics. Panel colors illustrate clusters for countries with absolute (ABS) and relative (REL) decoupling between expenditures and emissions, increasing CO2 intensity (INC), and countries unclassified due to data gaps (NA).
+
+```{r cache=FALSE, message=FALSE, warning=FALSE, fig.width = 17.8*0.393701, fig.height = 9*0.393701, eval = params$visualize}
+
+# Calculate health carbon footprint per capita and
+# select constant 2010 USD health expenditure:
+expenditure = df_hcf %>% 
+  mutate(HCF_pc = (Total_HCF*1000)/population) %>% 
+  select(LOCATION, Year, HCF_pc, 
+         hexp_const = hexp_constant_2010_USD, population,
+         gdp_const, gdp_const_ppp)
+
+# Calculate fraction
+# of health expenditure per GDP PPP (total and per capita):
+df_data = expenditure %>%
+  mutate(hexp_fraction = hexp_const*1000000/gdp_const,
+         hexp_const_ppp = hexp_fraction*gdp_const_ppp,
+         hexp_const_pc = hexp_const*1000000/population,
+         hexp_const_ppp_pc = hexp_const_ppp/population)
+
+
+# Calculate intensity (health carbon footprint per capita divided by
+# health expenditure constant 2011 USD PPP):
+df_data_ppp = df_data  %>%
+  select(LOCATION, Year, HCF_pc, hexp_const_ppp_pc) %>%
+  mutate(intensity = HCF_pc/hexp_const_ppp_pc)
+
+# Convert for plot:
+df_pdata_ppp = df_data_ppp %>%
+  na.omit() %>%
+  group_by(LOCATION) %>%
+  mutate(HCF_pc = HCF_pc/mean(HCF_pc),
+         hexp_const_ppp_pc = hexp_const_ppp_pc/mean(hexp_const_ppp_pc),
+         intensity = intensity/mean(intensity)) %>%
+  ungroup() %>%
+  gather(indicator, relative, -LOCATION, -Year) %>%
+  mutate(LOCATION = as.factor(LOCATION))
+
+# Complete sample (add missing value rows for ggplot to work correctly):
+years = 15
+indicators = 3
+countries = length(levels(df_pdata_ppp$LOCATION))
+
+tmp = data.frame(LOCATION = rep(levels(df_pdata_ppp$LOCATION), each=indicators*years), 
+                 Year = rep(seq(from=2000,to=2014), times=indicators*countries),
+                 indicator = rep(
+                   rep(c("hexp_const_ppp_pc", "HCF_pc", "intensity"), each=years), 
+                   times=countries)) ##
+
+df_pdata_ppp = tmp %>% left_join(df_pdata_ppp, 
+                        by = c("LOCATION" = "LOCATION", 
+                               "Year" = "Year", 
+                               "indicator"="indicator"))
+
+# Calculate Trends for color classification:
+df_start = df_data_ppp %>% group_by(LOCATION) %>%
+  filter(Year<2005) %>%
+  summarise(hcf_start_mean = median(HCF_pc, na.rm = T),
+            hexp_ppp_start_mean = median(hexp_const_ppp_pc, na.rm = T),
+            intensity_start_mean = median(intensity, na.rm = T)
+            ) %>%
+  ungroup()
+
+df_end = df_data_ppp %>% group_by(LOCATION) %>%
+  filter(Year>=2010, Year<=2014) %>%
+  summarise(hcf_end_mean = median(HCF_pc, na.rm = T),
+            hexp_ppp_end_mean = median(hexp_const_ppp_pc, na.rm = T),
+            intensity_end_mean = median(intensity, na.rm = T)
+            ) %>%
+  ungroup()
+
+df_trends_ppp = df_start %>% 
+  left_join(df_end) %>%
+  mutate(hcf_trend = (1-hcf_start_mean/hcf_end_mean)*100,
+         hexp_ppp_trend = (1-hexp_ppp_start_mean/hexp_ppp_end_mean)*100,
+         intensity_trend = (1-intensity_start_mean/intensity_end_mean)*100)
+  
+df_trends_ppp = df_trends_ppp %>%
+  mutate(tclass = ifelse(test = (hexp_ppp_trend < hcf_trend), 
+                       yes = "INC",
+                       no = ifelse(test = (hcf_trend < 0), 
+                                   yes = "ABS",
+                                   no = "REL")))
+
+df_trends = data.frame(LOCATION = levels(df_pdata_ppp$LOCATION)) %>%
+  left_join(df_trends_ppp, by= "LOCATION") %>%
+  select(LOCATION, tclass)
+
+# Remove these two because of missing data/trend:
+df_trends[df_trends$LOCATION=="ISL",]$tclass = NA
+df_trends[df_trends$LOCATION=="MEX",]$tclass = NA
+
+# colrs = c("green", "red", "blue"):
+colrs = c("#1b9e77","#d95f02","#7570b3")
+
+# Plot Figure 3:
+p3 = ggplot(df_pdata_ppp) +
+  geom_rect(data= df_trends, aes(fill = factor(tclass)),xmin = -Inf,xmax = Inf,
+            ymin = -Inf,ymax = Inf,alpha = 0.2) +
+  scale_fill_manual(values = colrs, na.value = "white",name= "Trend") +
+  #scale_fill_manual(values = colorvalues[1:3], na.value = "white",name= "Trend") +
+  geom_line(aes(y=relative, x=Year, group=indicator, linetype=indicator)) +
+  labs(x="", y=TeX("Indexed value $x_i /  \\bar{x}$")) +
+  facet_wrap(~LOCATION, ncol = 9) +
+  #scale_color_brewer(palette="Dark2", 
+  # name = "", labels = c("HCF/cap","Health Expenditure/cap", "CO2 Intensity")) +
+  scale_linetype_manual(values=c("solid", "dashed", "dotted"), name = "", 
+                        labels = c("HCF/cap","Health Expenditure/cap", "CO2 Intensity")) +
+  theme_light(10) +
+  theme(strip.text.x = element_text( margin = margin( b = 1, t = 1), colour = 'black'),
+        panel.spacing = unit(0, "lines"),
+        axis.text.x = element_text(angle = 90, vjust = 0.5),
+        legend.position = "bottom",
+        legend.margin=margin(t = 0, unit='cm'),
+        legend.key = element_rect(fill = "white", colour = "black"))
+
+
+ggsave(paste0(out_dir_figures, "figure_3.pdf"), width = 17.8, height = 9, units = "cm")
+ggsave(paste0(out_dir_figures, "figure_3.png"), width = 17.8, height = 9, units = "cm", 
+ dpi=250)
+
+p3
+```
+
+## Panel analysis (table 2)
+
+Estimate fixed-effects model.
+
+```{r results='asis', cache=TRUE, message=FALSE, warning=FALSE, eval = params$visualize}
+
+# Panel analysis: data:
+dat_select = df_hcf %>%
+  select(LOCATION, Year, 
+         Total_HCF, 
+         Domestic_HCF, 
+         hexp_const = hexp_constant_2010_USD, 
+         population,
+         gdp_const,
+         gdp_const_ppp,
+         CO2_power_industry:Total_CO2_all,
+         TFC_Mtoe) %>%
+  mutate(hexp_fraction = hexp_const*1000000/gdp_const,
+         hexp_const_ppp = hexp_fraction*gdp_const_ppp,
+         hexp_const_pc = hexp_const*1000000/population,
+         hexp_const_ppp_pc = hexp_const_ppp/population) %>%
+      transmute(LOCATION, Year,
+    HCF_total_pc = Total_HCF*100000/population,
+    HCF_domestic_pc = Domestic_HCF*100000/population,
+    CI_ES_TFC_all_wo_non_combustion = Total_CO2_wo_non_combustion/TFC_Mtoe,
+    CI_ES_TFC_power_industry = CO2_power_industry/TFC_Mtoe,
+    CI_ES_TFC_transport = CO2_transport/TFC_Mtoe,
+    CI_ES_TFC_other_industrial_combustion = CO2_other_ind_combustion/TFC_Mtoe,
+    CI_ES_TFC_buildings = CO2_buildings/TFC_Mtoe,
+    EI_EC_PPP = TFC_Mtoe*1000000000/gdp_const_ppp,
+    EI_EC_OER = TFC_Mtoe*1000000000/gdp_const,
+    hexp_const_ppp_pc = hexp_const_ppp_pc*0.001,  # in thousands
+    hexp_const_pc = hexp_const_pc*0.001) 
+
+
+# Take the log of all variables:
+dat_reg = dat_select %>% 
+  mutate_at(.funs = funs(log), .vars = vars(HCF_total_pc:hexp_const_pc)) %>% 
+  select(LOCATION, 
+         Year, 
+         HCF_total_pc, 
+         HCF_domestic_pc, 
+         CI_ES_TFC_all_wo_non_combustion, 
+         EI_EC_PPP, hexp_const_ppp_pc) 
+
+# Panel analysis: model estimation
+
+# Estimate both models (total HCF/capita as dependent
+# and domestic HCF/capita as dependent) by pooled OLS:
+pooledols_1 = plm(HCF_total_pc ~ CI_ES_TFC_all_wo_non_combustion + 
+                           EI_EC_PPP + hexp_const_ppp_pc, data=dat_reg, 
+                         index=c("LOCATION", "Year"), model="pooling")
+
+pooledols_4 = plm(HCF_domestic_pc ~ CI_ES_TFC_all_wo_non_combustion + 
+                           EI_EC_PPP + hexp_const_ppp_pc, data=dat_reg, 
+                         index=c("LOCATION", "Year"), model="pooling")
+
+# Estimate both models with fixed effects estimator:
+fixed_1 <- plm(HCF_total_pc ~ CI_ES_TFC_all_wo_non_combustion + 
+                 EI_EC_PPP + hexp_const_ppp_pc, data=dat_reg, 
+               index=c("LOCATION", "Year"), model="within")
+
+fixed_4 <- plm(HCF_domestic_pc ~ CI_ES_TFC_all_wo_non_combustion + 
+                 EI_EC_PPP + hexp_const_ppp_pc, data=dat_reg, 
+               index=c("LOCATION", "Year"), model="within")
+
+# Estimate both models with random effects estimator:
+random_1 <- plm(HCF_total_pc ~ CI_ES_TFC_all_wo_non_combustion + 
+                  EI_EC_PPP + hexp_const_ppp_pc, data=dat_reg, 
+                index=c("LOCATION", "Year"), model="random")
+
+random_4 <- plm(HCF_domestic_pc ~ CI_ES_TFC_all_wo_non_combustion + 
+                  EI_EC_PPP + hexp_const_ppp_pc, data=dat_reg, 
+                index=c("LOCATION", "Year"), model="random")
+
+# Test for evidence of fixed effects. F test for individual effects; 
+# if p-value less than 0.05, evidence of fixed effects:
+pFtest(fixed_1, pooledols_1)
+
+pFtest(fixed_4, pooledols_4)
+
+# Test between pooled OLS and random effects. Breusch-Pagan Lagrange multiplier; 
+# if p-value less than 0.05, reject the null of random effects not appropriate:
+plmtest(pooledols_1, type = ("bp"))
+
+plmtest(pooledols_4, type = ("bp"))
+
+# Test between fixed effects and random effects. Hausman test;
+# if p-value less than 0.05, use fixed effects:
+phtest(fixed_1, random_1)
+
+phtest(fixed_4, random_4)
+
+# Estimate both models with two-way fixed effects estimator:
+fixed_twoway_1 <- plm(HCF_total_pc ~ CI_ES_TFC_all_wo_non_combustion + 
+                        EI_EC_PPP + hexp_const_ppp_pc, data=dat_reg, 
+                      index=c("LOCATION", "Year"), model="within", effect = "twoways")
+
+fixed_twoway_4 <- plm(HCF_domestic_pc ~ CI_ES_TFC_all_wo_non_combustion + 
+                        EI_EC_PPP + hexp_const_ppp_pc, data=dat_reg, 
+                      index=c("LOCATION", "Year"), model="within", effect = "twoways")
+
+# F test. If p-value less than 0.05, reject the null of no significant twoways effects:
+pFtest(fixed_twoway_1, fixed_1)
+
+pFtest(fixed_twoway_4, fixed_4)
+
+# Test for cross-sectional dependence
+# Breusch-Pagan test. If p-value less than 0.05, evidence of cross-sectional dependence, 
+# although Pesaran test better for unbalanced panels:
+pcdtest(fixed_1, test = c("lm"))
+
+# Pesaran test. If p-value less than 0.05, evidence of cross-sectional dependence:
+pcdtest(fixed_1, test = c("cd"))
+
+# Test for serial correlation
+# Breusch-Godfrey/Wooldridge test. If p-value less than 0.05, evidence of serial 
+# correlation: 
+pbgtest(fixed_1)
+
+# Test for unit root. If p-value less than 0.05, no evidence of unit root present:
+Panel.set <- pdata.frame(dat_reg, index=c("LOCATION", "Year")) 
+
+# Need to remove NAs:
+Panel.set <- Panel.set %>% drop_na()
+
+adf.test(Panel.set$HCF_total_pc, k=2)
+
+# Test for heteroskedasticity. If p-value less than 0.05, evidence of heteroskedasticity:
+bptest(HCF_total_pc ~ CI_ES_TFC_all_wo_non_combustion + 
+         EI_EC_PPP + hexp_const_ppp_pc + factor(LOCATION), data = dat_reg, 
+       studentize=F)
+
+# Evidence of heteroskedasticity, serial correlation and cross-sectional dependence. 
+# 'Arellano' standard errors robust to heteroskedasticity and serial correlation 
+# recommended for fixed effects:
+coeftest(fixed_1, vcov. = vcovHC(fixed_1, method = "arellano"))
+coeftest(fixed_4, vcov. = vcovHC(fixed_4, method = "arellano"))
+
+# Driscoll-Kraay standard errors robust to heteroskedasticity,
+# serial correlation and cross-sectional dependence. Question of optimal 
+# amount of time periods:
+coeftest(fixed_1, vcov. = vcovSCC)
+coeftest(fixed_4, vcov. = vcovSCC)
+
+```
+
+### Table 2
+
+Economy wide determinants of the health carbon footprint (HCF): two fixed-effects
+models using total HCF/cap (model1) and domestic HCF/cap (model2) as dependent
+variables. Independent variables are the carbon intensity of the domestic energy system
+(CO2/TFC), measured as CO2 emissions from fossil fuel combustion per total final energy
+consumption (TFC), the energy intensity of the domestic economy (TFC/GDP), measured as
+total final energy consumption (TFC) per GDP in purchasing power parities (ppps) (const.
+2011 int. USD), and health care expenditure per capita (Health care expenditure/cap),
+measured in ppps, const. 2011 int. USD. Coefficients can be interpreted as elasticities, as all
+variables are logarithmic.
+
+Note that standard errors in this table must be replaced with the Driscoll-Kraay robust standard 
+errors calculated in previous code chunk to replicate the table in the main manuscript.
+
+```{r results='asis', cache=TRUE, message=FALSE, warning=FALSE, eval = params$visualize}
+
+stargazer(fixed_1, fixed_4, header=FALSE, type = "latex", 
+          out = paste0(out_dir_figures, "/table2.html"), 
+          title="Health footprint regression",
+          dep.var.labels = c("model1","model2"),
+          column.labels=c("log(Total HCF/cap)", "log(Domestic HCF/cap)"), 
+          covariate.labels = c("log(CO2/TFC)","log(TFC/GDP)","log(Health care expenditure/cap)"),
+          no.space=TRUE)
+
+```
+
+\pagebreak
+
+# Figures in Supplementary Information
+
+The figures in the supplementary information can only be generated when both 'params: analyze:' and 'params: visualize:' are set to 'TRUE' in the yaml header. This is because they require more input files than 'df_hcf'. 
+
+## SI Figure S1
+
+Map
+
+```{r cache=TRUE, message=FALSE, warning=FALSE, fig.width = 18*0.393701, fig.height = 10*0.393701, eval = params$analyze}
+
+# Calculate HCF per capita, 
+# filter for the year 2014, and group by quintile:
+hcf = df_hcf %>% 
+  mutate(HCF_cap = (Total_HCF*1000)/population,
+         Investment = (Investment_HCF*1000)/population,
+         Public = (Public_HCF*1000)/population,
+         Private = (Private_HCF*1000)/population) %>%
+  select(LOCATION, Year, Investment, Public, Private) %>% 
+  gather(Financing.scheme,HCF_cap,Investment:Private) %>%
+  filter(Year == "2014") %>%
+  group_by(LOCATION) %>%
+  summarise(value = sum(HCF_cap)) %>%
+  ungroup() %>%
+  rename(iso3 = LOCATION) %>%
+  mutate(quintile = ntile(value, 4)) %>%
+  group_by(quintile) %>%
+  mutate(qmax = paste0("< ",round(max(value),2))) %>%
+  ungroup()
+
+# Create map, Figure S1:
+hcf_map = joinCountryData2Map(hcf, joinCode = "ISO3", nameJoinColumn = "iso3")
+hcf_map_poly = fortify(hcf_map) #extract polygons 
+
+hcf_map_poly = merge(hcf_map_poly, hcf_map@data, by.x="id", by.y="ADMIN", all.x=T)
+hcf_map_poly = hcf_map_poly %>% arrange(id, order)
+
+ggplot() + 
+  coord_map(xlim = c(-170, 170), ylim = c(-43, 72))  +
+  geom_polygon(data = hcf_map_poly, aes(long, lat, group = group), color="black") +
+  geom_polygon(data = hcf_map_poly, aes(long, lat, group = group, 
+                                        fill=factor(qmax) )) + 
+  scale_fill_brewer(palette="YlGnBu", na.value = "#FFFFFF") +
+  #scale_fill_viridis(discrete = TRUE, option = "A", na.value="#FFFFFF") +
+  theme_bw() + xlab(NULL) + ylab(NULL) +
+  guides(fill = guide_legend(
+    title='HCF (t/cap)',
+    keywidth = 0.7, keyheight = 0.7, nrow = 5, 
+    reverse=F, title.position="top")) +
+  theme(
+    plot.background = element_blank()
+    ,panel.grid.major = element_blank()
+    ,panel.grid.minor = element_blank()
+    ,panel.border = element_blank()
+    ,axis.ticks = element_blank()
+    ,axis.text.x = element_blank()
+    ,axis.text.y = element_blank()
+    ,legend.title = element_text(size=13)
+    ,legend.text =  element_text(size=12)
+    ,legend.position = c(0.1, 0.2)
+    ,legend.direction = "vertical"
+    ,legend.key = element_rect(color="black")
+  ) 
+
+ggsave(paste0(out_dir_figures, "/SI_figure_1.pdf"), width = 18, height = 10, units = "cm")
+ggsave(paste0(out_dir_figures, "/SI_figure_1.png"), width = 18, height = 10, units = "cm", 
+ dpi=250)
+
+```
+
+## SI Figure S2
+
+SI Figure S2 takes the summarized health expenditure data calculated previously, and shows where both current health expenditure and investment are available, where only current health expenditure data is available, and where neither are available. 
+
+```{r , message=FALSE, warning=FALSE, fig.width=17.8*0.393701, fig.height=6*0.393701, eval = params$analyze}
+
+# Show data coverage between current (public + private) health care expenditure,
+# and health care investment data
+
+# Join investment data with health care expenditure data and calculate
+# investment percent of current (public + private) health care expenditure:
+investment = hexp_current_summarised %>% 
+  left_join(h_inv_incomplete, by = c('LOCATION','Year')) %>%
+   mutate(investment_percent_of_total_health_expenditure = Value.y/Value.x) %>% 
+  select(LOCATION, Year, investment_percent_of_total_health_expenditure) %>% 
+  na.omit() %>%
+  filter(Year < 2015)
+
+expenditure_current = df_hcf %>%
+  select(LOCATION, Year, hexp_current_USD) %>%
+  filter(Year < 2015)
+
+expenditure_current = expenditure_current[complete.cases(expenditure_current),]
+
+inv_dat = expenditure_current %>% 
+  left_join(investment %>% 
+              select(LOCATION, 
+                     Year, 
+                     inv_share_exp = investment_percent_of_total_health_expenditure),
+            by = c("LOCATION", "Year"))
+
+# Plot Figure S2:
+ggplot(inv_dat, aes(LOCATION, Year)) + 
+  geom_tile(aes(fill = inv_share_exp)) + 
+  scale_fill_gradient(low = "lightgrey", high = "darkblue", na.value = "yellow") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+
+ggsave(paste0(out_dir_figures, "SI_figure_2.pdf"), width = 17.8, height = 6, units = "cm")
+ggsave(paste0(out_dir_figures, "SI_figure_2.png"), width = 17.8, height = 6, units = "cm", 
+ dpi=250)
+
+```
+
+## SI Figure S3
+
+SI Figure S3 takes the investment data calculated previously to show its share of current health expenditure for those observations where both are available. 
+
+```{r , message=FALSE, warning=FALSE, fig.width=17.8*0.393701, fig.height=10*0.393701, eval = params$analyze}
+
+# Use investment data from previous code chunk to calculate average investment
+# shares of current (public + private) health care expenditure:
+inv_dat_sum = inv_dat %>%
+  group_by(Year) %>%
+  summarise(inv_share_exp = mean(inv_share_exp, na.rm=T)) %>%
+  filter(Year != 2015)
+
+inv_mean = mean(inv_dat_sum$inv_share_exp, na.rm = T)
+
+# Plot Figure S3:
+ggplot(inv_dat, aes(x=Year, y=inv_share_exp)) +
+  geom_line(aes(group=LOCATION, color=LOCATION), alpha=0.25, se = FALSE) +
+  geom_text(aes(label=LOCATION), alpha=0.6, size=1.5) +
+  geom_smooth() +
+  ylab("Investment as fraction of current health expenditure") +
+  geom_point(data=inv_dat_sum, aes(x=Year, y=inv_share_exp), color="red", shape=2) +
+  geom_hline(yintercept = inv_mean, color="black", alpha=1, linetype=2) +
+  theme_bw() +
+  theme(legend.position = "none")
+
+
+ggsave(paste0(out_dir_figures, "SI_figure_3.pdf"), width = 17.8, height = 10, units = "cm")
+ggsave(paste0(out_dir_figures, "SI_figure_3.png"), width = 17.8, height = 10, units = "cm", 
+ dpi=250)
+
+
+```
+
+## SI Figure S4
+
+Average shares of health carbon footprint (HCF) attributable to Eora production sectors in 2014 across all OECD countries with 2014 data. The first code chunk is set to 'eval = FALSE' as it is performed on the cluster. It loops through the mapped intensity breakdowns of each country in 2014 (saved when calculating the OECD mapped intensities with the cluster computer) which give the mapped intensities of each production sector in Eora. These are multiplied by health expenditure to calculate the health carbon footprint broken down by the production sector where emissions originally occurred.
+
+```{r, warning = FALSE, message = FALSE, eval = FALSE}
+
+# Use mapped intensities breakdown by production sector (for each country 
+# in 2014) calculated on cluster to average each sector's contribution 
+# to the health carbon footprint across production sectors
+
+# Categories to bind with each country's intensities for each year:
+Financing.scheme = as.matrix(c(rep("Government/compulsory schemes", 9), 
+                            rep("Voluntary schemes/household out-of-pocket payments", 9), 
+                            "All domestic providers"))
+Provider = as.matrix(c(rep(c("Hospitals", "Residential long-term care facilities", 
+                             "Providers of ambulatory health care", 
+                             "Providers of ancillary services",
+                             "Retailers and other providers of medical goods", 
+                             "Providers of preventive care", 
+                             "Providers of health care system administration and financing", 
+                             "Rest of the economy", "Rest of the world"), 2), 
+                       "Gross fixed capital formation (all types of assets)"))
+
+OECD_countries = c("USA","GBR","JPN","ESP", "AUS","CAN","DEU","KOR","TUR","AUT",
+              "FRA","ITA","MEX", "BEL", "CHE", "CZE", "DNK", "EST", "FIN", 
+              "GRC", "HUN", "IRL", "ISL", "ISR", "LUX", "LVA", "NLD", "NOR", 
+              "NZL", "POL", "PRT", "SVK",
+              "SVN", "SWE")
+
+All_breakdowns = NULL
+
+# Loop through each country's mapped intensities breakdown and bind together:
+for (i in OECD_countries){
+  country_current = i
+  mapped_intensities_breakdown = readRDS( 
+                                  paste0("../mapped_intensities_breakdown_2014_", 
+                                  country_current, ".rds"))
+  Country = rep(country_current, 19)
+  with_everything = data.frame(Financing.scheme, Provider, Country, 
+                               mapped_intensities_breakdown)
+  All_breakdowns = rbind(All_breakdowns, with_everything)
+}
+
+All_breakdowns = All_breakdowns %>% rename(LOCATION = "Country")
+
+# Health care expenditure in current USD again: 
+hexp_current = read.csv(paste0(data_dir, 
+                                                   "OECD_healthexpenditures.csv")) %>% 
+  filter(Measure == "Current prices", 
+           Function == "Current expenditure on health (all functions)", 
+           !(Financing.scheme == "All financing schemes"), 
+         !(Provider == "All providers")) %>% 
+  select(Financing.scheme, Provider, Measure, LOCATION, Year, Unit, Value) %>%
+    filter(!(Year %in% c("2015","2016")), 
+         !(LOCATION=="IRL" & Year%in%c(2000,2001,2002,2003)) & 
+                          !(LOCATION=="KOR" & Year==2000) &
+                          !(LOCATION=="SVK" & Year%in%c(2000,2001,2002,2003)))
+
+hexp_current_summarised = hexp_current %>% 
+  group_by(LOCATION, Year) %>% 
+  summarise(Value = sum(Value))
+
+h_inv_incomplete = read.csv(paste0(data_dir, 
+                                   "OECD_healthinvestment.csv")) %>% 
+  filter(Measure == "Current prices") %>% 
+  rename(Financing.scheme = "Provider", 
+         Provider = "Type.of.asset") %>% 
+  select(Financing.scheme, Provider, Measure, LOCATION, Year, Unit, Value) 
+
+h_inv_interpolated = hexp_current_summarised %>% 
+  left_join(h_inv_incomplete, by = c('LOCATION','Year')) %>%
+   mutate(proportion_investment = Value.y/Value.x) 
+
+h_inv_proportions = h_inv_interpolated %>% 
+  group_by(LOCATION) %>% 
+  summarise_at(vars(proportion_investment), funs(mean(., na.rm=TRUE))) %>% 
+  mutate(proportion_investment = ifelse(is.na(proportion_investment), 
+                                        0.05, proportion_investment))
+
+h_inv = h_inv_interpolated %>% 
+  left_join(h_inv_proportions, by = "LOCATION") %>% 
+  mutate(Value = ifelse(is.na(proportion_investment.x),
+                        Value.x*proportion_investment.y,Value.y)) %>% 
+  select(LOCATION, Year, Financing.scheme, Provider, Measure, Unit, Value) %>% 
+  mutate(Unit = ifelse(LOCATION %in% c("AUT","BEL","DEU","ESP","EST",
+                                       "FIN","FRA","GRC","IRL","ITA","LUX",
+                                       "LVA","NLD","PRT","SVK","SVN"), "Euro", 
+                ifelse(LOCATION == "AUS", "Australian Dollar",
+                ifelse(LOCATION == "CAN", "Canadian Dollar",
+                ifelse(LOCATION == "CHE", "Swiss Franc",
+                ifelse(LOCATION == "CZE", "Czech Koruna",
+                ifelse(LOCATION == "DNK", "Danish Krone",
+                ifelse(LOCATION == "GBR", "Pound Sterling",
+                ifelse(LOCATION == "HUN", "Forint",
+                ifelse(LOCATION == "ISL", "Iceland Krona",
+                ifelse(LOCATION == "ISR", "New Israeli Sheqel",
+                ifelse(LOCATION == "JPN", "Yen",
+                ifelse(LOCATION == "KOR", "Won",
+                ifelse(LOCATION == "MEX", "Mexican Peso",
+                ifelse(LOCATION == "NOR", "Norwegian Krone",
+                ifelse(LOCATION == "NZL", "New Zealand Dollar",
+                ifelse(LOCATION == "POL", "Zloty",
+                ifelse(LOCATION == "SWE", "Swedish Krona",
+                ifelse(LOCATION == "TUR", "Turkish Lira",
+                ifelse(LOCATION == "USA", "US Dollar", Unit)))))))))))))))))))) %>% 
+  ungroup() %>% fill(Financing.scheme, Provider, Measure) 
+
+hexp_w_inv = hexp_current %>% 
+  bind_rows(h_inv)
+
+hexp = hexp_w_inv %>% 
+  left_join(ex_rates, by = c("Year", "Unit")) %>% 
+  mutate(hexp_current_USD = Value / EX_rate)
+
+# Filter health expenditure for the year 2014:
+hexp_2014 = hexp %>% filter(Year == "2014")
+
+# Join health care expenditure in 2014 with all mapped intensity breakdowns:
+join = hexp_2014 %>% left_join(All_breakdowns, 
+                                    by = c("Financing.scheme", "Provider", "LOCATION")) 
+
+# Multiply expenditure with mapped intensities:
+physical_emissions = join %>% mutate_at(.funs = funs(./1000), 
+                                        .vars = vars(X1:X14839)) %>% 
+  mutate_at(.funs = funs(. * (hexp_current_USD*1000000)), .vars = vars(X1:X14839)) %>% 
+  group_by(LOCATION) %>% summarise_at(.funs = funs(sum), .vars = vars(X1:X14839))
+
+# saveRDS(physical_emissions, 
+#        paste0(data_dir, 
+#        "/hcf_2014_prod_sectors.rds"))
+
+```
+
+Read in the saved emissions broken down by production sector, calculated on the cluster in the previous code chunk.
+
+```{r cache=TRUE, message=FALSE, warning=FALSE, fig.width = 15*0.393701, fig.height = 10*0.393701, eval = params$analyze}
+
+# Read in physical emissions calculated on cluster and saved in previous code chunk:  
+physical_emissions = readRDS(paste0(data_dir, 
+                                    "/hcf_2014_prod_sectors.rds"))
+physical_emissions_numbers_only_transposed = as.matrix(t(physical_emissions[,2:14840]))
+
+# Read in created table with breakdowns of Eora sectors:
+sector_breakdown = read.csv(paste0(data_dir,"sector_breakdown.csv")) %>% 
+  select(Sub_sector)
+
+together = data.frame(cbind(sector_breakdown, physical_emissions_numbers_only_transposed) %>% 
+                        group_by(Sub_sector) %>% 
+                        summarise_at(.funs = funs(sum), .vars = vars(1:32)))[-1,]
+
+columns = c("Sub_sector","AUS","AUT","BEL","CAN","CHE","CZE","DEU",
+            "DNK","ESP","EST","FIN","FRA","GBR",
+            "GRC","HUN","IRL","ISL","ITA","JPN","KOR",
+            "LUX","LVA","MEX","NLD","NOR","POL","PRT", 
+            "SVK","SVN","SWE","TUR","USA")
+
+colnames(together) = columns
+
+percentages = together %>% mutate_at(.vars = vars(2:33), funs(100*./sum(.))) %>% 
+  group_by(Sub_sector) %>% gather(LOCATION, Percent_of_HCF, 2:33) %>% 
+  rename(Sector = Sub_sector) %>% ungroup() %>% 
+  mutate(Sector = fct_recode(Sector, "Services" = "Health and social work",
+                               "Transport" = "Freight transport")) %>% 
+  group_by(Sector,LOCATION) %>% summarise(Percent_of_HCF = sum(Percent_of_HCF))
+
+percentages = percentages %>%
+  group_by(Sector) %>%
+  summarise(mean.fraction = mean(Percent_of_HCF, na.rm = TRUE),
+            sd.fraction = sd(Percent_of_HCF, na.rm = TRUE),
+            n.fraction = n()) %>%
+  mutate(se.fraction = sd.fraction / sqrt(n.fraction),
+    lower.ci.fraction = mean.fraction - qt(1 - (0.05 / 2), n.fraction - 1) * se.fraction,
+    upper.ci.fraction = mean.fraction + qt(1 - (0.05 / 2), n.fraction - 1) * se.fraction) %>%
+  mutate(Sector = fct_reorder(Sector, mean.fraction, desc=T))
+
+# Plot Figure S4:
+ggplot(percentages, aes(y=mean.fraction, x=Sector)) +
+  geom_col() +
+  geom_errorbar(aes(ymin=lower.ci.fraction, ymax=upper.ci.fraction), 
+                color="black", width=0.05) +
+  coord_flip() +
+  labs(x="", y="% of HCF") +
+  theme_minimal() 
+
+ggsave(paste0(out_dir_figures, "/SI_figure_4.pdf"), width = 15, height = 10, units = "cm")
+ggsave(paste0(out_dir_figures, "/SI_figure_4.png"), width = 15, height = 10, units = "cm", 
+ dpi=250)
+
+```
+
+## SI Figure S5
+
+Percentage contributions of Eora-26 production sectors to the national carbon footprint in 2014, for all countries with 2014 health carbon footprint estimates. The Eora-26 national footprints are calculated on the cluster as well, saved and loaded in the following code chunk. 
+
+```{r, warning = FALSE, message = FALSE, eval = FALSE}
+
+# Cluster script to get Eora-26 national footprints (year 2014):
+Technology_matrix = read.table("../Eora26_2014_bp_T.txt")
+final_demand = read.table("../Eora26_2014_bp_FD.txt")
+total_output = as.matrix(rowSums(Technology_matrix) + rowSums(final_demand))
+E26_Satellite = read.table("../Eora26_2014_bp_Q.txt")
+CO2 = as.matrix(t(E26_Satellite[2709,]))
+DIV = as.matrix(CO2/total_output)
+DIV[is.na(DIV)]=0
+
+A = as.matrix(Technology_matrix) %*% diag(1/as.vector(total_output))
+A[is.na(A)]=0
+
+L = solve(diag(dim(A)[1])-A)  
+L[is.na(L)]=0
+
+TIV = as.data.frame(as.vector(DIV) %*% L)
+
+all_emissions = t(TIV) * final_demand
+
+# saveRDS(all_emissions, paste0(data_dir, "/E26_all_emissions_2014.rds"))
+
+```
+
+Use the Eora-26 national footprints calculated above on the cluster to calculate the percentage contributions of each production sector to the national footprint. 
+
+```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+
+All_countries = c("USA","GBR","JPN","ESP", "AUS","CAN","DEU","KOR","TUR","AUT",
+              "FRA","ITA","MEX", "BEL", "CHE", "CZE", "DNK", "EST", "FIN", "GRC", "HUN", 
+              "IRL", "ISL", "ISR", "LUX", "LVA", "NLD", "NOR", "NZL", "POL", "PRT", "SVK",
+              "SVN", "SWE", "CHN","IND")
+
+# Calculate Eora-26 contributions of production sectors to the national footprint
+
+E26_labels = read.csv(paste0(data_dir, "/labels_T_E26.csv"), header = T)
+
+# Read in created matrix with final demand index start ids 
+# and T table index ids:
+fd_and_t_ids = read.csv(paste0(data_dir, "fd_and_t_ids.csv"), header = T) 
+row.names(fd_and_t_ids) = fd_and_t_ids$iso3
+
+# Read in national footprints calculated on the cluster with Eora-26, 
+# and saved in previous code chunk:
+E26_2014 = as.data.frame(readRDS(paste0(data_dir,
+                                        "/E26_all_emissions_2014.rds")))
+
+year_current = 2014
+
+df_data_summed = as.data.frame(colSums(E26_2014))
+fd_column_id = seq(1,1140,1)
+df_data_with_ids = cbind(fd_column_id, df_data_summed) 
+country_fd_ids = fd_and_t_ids %>% filter(iso3 %in% All_countries)
+Year = rep(year_current, 216)
+columns_expanded = data.frame(iso3 = rep(country_fd_ids$iso3, each=6),
+                              fd_column_id = rep(country_fd_ids$fd_start_id, each=6)) %>% 
+  mutate(fd_column = rep(seq(from=0,to=5,by=1), nrow(country_fd_ids)), 
+         fd_column_id = fd_column_id+fd_column) 
+columns_expanded = cbind(columns_expanded, Year)
+
+df_data_with_ids = as.data.frame(cbind(fd_column_id, t(E26_2014)))
+df_footprints_CO2 = as.data.frame(columns_expanded %>% 
+                                    left_join(df_data_with_ids, by = "fd_column_id") %>% 
+                                    select(-fd_column_id,-fd_column,-Year) %>% 
+                                    group_by(iso3) %>% 
+                                    summarise_at(.vars = vars(V2:V4916), .funs = sum))
+
+country_codes = df_footprints_CO2[,1]
+numeric = df_footprints_CO2[,-1]
+transpose_numeric = t(numeric)
+
+colnames(transpose_numeric) <- c("AUS", "AUT", "BEL", "CAN", "CHE", "CHN", "CZE", "DEU", 
+                                 "DNK", 
+                  "ESP", "EST", "FIN", "FRA", "GBR", "GRC", "HUN",
+                  "IND", "IRL", "ISL", "ISR", "ITA", "JPN", "KOR", "LUX", 
+                  "LVA", "MEX", "NLD", "NOR", 
+"NZL", "POL", "PRT", "SVK", "SVN", "SWE", "TUR", "USA")
+
+bind_with_labels = as.data.frame(cbind(E26_labels, transpose_numeric))
+
+totals = bind_with_labels %>% group_by(Sector) %>% 
+  summarise_at(.vars = vars(AUS:USA), .funs = sum) %>% 
+  gather(LOCATION, total, AUS:USA) %>% group_by(LOCATION) %>% 
+  mutate(fraction = (total/sum(total))*100) %>% select(-total)
+
+```
+
+Join the calculated percentages with the main data frame 'df_hcf' to include health care's contribution to the national footprint. Our health care footprint estimates ‘Health Care,’ were subtracted from the larger Eora-26 sector ‘Education, Health and Other Services’ so as not to double count emissions. 
+
+```{r cache=TRUE, message=FALSE, warning=FALSE, fig.width = 20*0.393701, fig.height = 13*0.393701, eval = params$analyze}
+
+# Calculate percentage contributions of Eora-26 sectors to the national footprint 
+# and include our health care carbon footprint estimates
+
+# Join sectoral national footprint contributions to the main dataframe, 
+# calculate health care percent of full Eora national footprint again 
+# (from the full version as shown in previous code chunks), 
+# filter for the year 2014, subtract our health 
+# care estimates from the Eora-26 'Education, Health, Other Services'
+# production sector so as not to double count emissions:
+sector_data = df_hcf %>% 
+  mutate(Health_care = (Total_HCF/National_CF)*100) %>% 
+  select(LOCATION, Year, Health_care) %>% 
+  gather(Sector, fraction, Health_care) %>%
+  filter(Year == "2014") %>% 
+  select(-Year) %>% 
+  bind_rows(totals) %>% # 'totals' from previous code chunk
+  filter(!(LOCATION %in% c("ISR","NZL"))) %>% spread(Sector, fraction) %>% 
+  rename(Education.Health.Other.services = "Education, Health and Other Services") %>% 
+  mutate(Education.Health.Other.services = Education.Health.Other.services - Health_care) %>% 
+  rename("Education, Health and Other Services" = Education.Health.Other.services, 
+         "Health Care" = Health_care) %>% 
+  gather(Sector, fraction, 2:29)
+
+# Set in descending rank by contribution to national footprint:
+df_sectors = sector_data %>%
+  arrange(LOCATION, desc(fraction)) %>% 
+  group_by(LOCATION) %>%
+  mutate(rank = rank(desc(fraction), ties.method = "first"))
+  
+# Calculate median fraction and rank:
+df_summary = df_sectors %>%
+  group_by(Sector) %>%
+  summarise(fraction = median(fraction, na.rm=T),
+            rank = median(rank, na.rm=T)) %>%
+  arrange(fraction)
+
+df_sectors$Sector = factor(df_sectors$Sector, levels = (df_summary$Sector))
+#x11(h=9, w=14)
+
+# Plot Figure S5
+ggplot(df_sectors, aes(Sector, fraction)) +
+  geom_boxplot() +
+  geom_point(alpha = 0.5) +
+  coord_flip() +
+  theme_bw() +
+  #theme(axis.title = element_text(size = 15), axis.text.y = element_text(size = 12)) +
+  ylab("% of National Carbon Footprint")
+
+ggsave(paste0(out_dir_figures, "/SI_figure_5.pdf"), width = 20, height = 13, units = "cm")
+ggsave(paste0(out_dir_figures, "/SI_figure_5.png"), width = 20, height = 13, units = "cm")
+
+```
+
+# Numbers in Text
+
+This shows the code for calculating the numbers presented in the text, primarily in the 'Results' section of the main manuscript. 
+
+```{r cache=TRUE, message=FALSE, warning=FALSE, eval = params$analyze}
+
+# Absolute HCF in 2014:
+pdat_table1 %>% 
+  filter(LOCATION %in% c("CHN", "LVA", "USA", "JPN", "IND", "DEU")) %>%
+  select(LOCATION, HCF)
+
+# HCF share of CF mean and sd in 2014:
+pdat_table1 %>% 
+  summarise(m_hcf_share = mean(HCF_share_CF),
+            sd_hcf_share = sd(HCF_share_CF))
+
+# HCF share of CF:
+pdat_table1 %>% 
+  filter(LOCATION %in% c("MEX", "NLD", "USA", "BEL", "JPN")) %>%
+  select(LOCATION, HCF_share_CF)
+
+hcf_share_region = pdat_f1a %>% 
+  group_by(LOCATION) %>%
+  transmute(Source.region, value = value / sum(value))
+
+# Regional contributions to HCF means and sds: 
+hcf_share_region %>% 
+  group_by(Source.region) %>%
+  summarise(m_share = mean(value),
+            sd_share = sd(value))
+
+# Domestic share of HCF:
+hcf_share_region %>%
+  filter(Source.region == "Domestic_HCF_share_CF", 
+         LOCATION %in% c("CHN","IND","POL","USA","SWE","LUX","CHE")) %>%
+  select(LOCATION, value) %>% rename(Domestic_share_HCF = value)
+
+# HCF per capita mean and sd:
+pdat_table1 %>% 
+  summarise(m_hcf_pc = mean(HCF_pc),
+            sd_hcf_pc = sd(HCF_pc))
+
+# HCF per capita:
+pdat_table1 %>% 
+  filter(LOCATION %in% c("USA", "IND", "LUX", "JPN", "EST", "SVK", "NLD", 
+                         "HUN", "LVA", "TUR", "MEX", "CHN")) %>%
+  select(LOCATION, HCF_pc)
+
+hcf_share_finance = pdat_f1b %>% 
+  group_by(LOCATION) %>%
+  transmute(Financing.scheme, 
+    value = HCF_pc / sum(HCF_pc))
+
+# Financing scheme contributions to HCF mean and sd:
+hcf_share_finance %>%
+  group_by(Financing.scheme) %>%
+  summarise(m_share = mean(value),
+            sd_share = sd(value))
+
+# Public share of HCF:
+hcf_share_finance %>%
+  filter(Financing.scheme == "Public",
+         LOCATION %in% c("MEX","IND","JPN","DNK")) %>%
+  select(LOCATION, value) %>% rename(Public_share_HCF = value)
+
+# Calculate sample population and GDP percentages of world total:
+df_population = read_excel(paste0(data_dir, "API_SP.POP.TOTL_DS2_en_excel_v2_9985116.xls"), 
+                     sheet = 1,
+                     skip = 3) %>% rename(Country.Name = "Country Name",
+                                          Country.Code = "Country Code",
+                                          Indicator.Name = "Indicator Name",
+                                          Indicator.Code = "Indicator Code") %>%
+  select(-Country.Name, -Indicator.Name, -Indicator.Code) %>%
+  gather(Year_string, population, -Country.Code) %>%
+  mutate(Year = strtoi(substr(Year_string, 1,5))) %>%
+  select(-Year_string) %>% 
+  rename(LOCATION = Country.Code) %>%
+  filter(Year > 1999)
+
+df_gdp = read_excel(paste0(data_dir, "API_NY.GDP.MKTP.CD_DS2_en_excel_v2.xls"), 
+                     sheet = 1,
+                     skip = 3) %>% rename(Country.Name = "Country Name",
+                                          Country.Code = "Country Code",
+                                          Indicator.Name = "Indicator Name",
+                                          Indicator.Code = "Indicator Code") %>%
+  select(-Country.Name, -Indicator.Name, -Indicator.Code) %>%
+  gather(Year_string,gdp, -Country.Code) %>%
+  mutate(Year = strtoi(substr(Year_string, 1,5))) %>%
+  select(-Year_string) %>% 
+  rename(LOCATION = Country.Code) %>%
+  filter(Year > 1999)
+
+# Population:
+Pop_2014 = df_population %>% filter(Year == "2014")
+world_pop = (Pop_2014 %>% filter(LOCATION == "WLD"))[,2]
+all_countries_pop = Pop_2014 %>% filter(LOCATION %in% All_countries) 
+pop_share = sum(all_countries_pop$population)/world_pop
+pop_share
+  
+# GDP:
+gdp_2014 = df_gdp %>% filter(Year == "2014")
+world_gdp = (gdp_2014 %>% filter(LOCATION == "WLD"))[,2]
+all_countries_gdp = gdp_2014 %>% filter(LOCATION %in% All_countries)
+gdp_share = sum(all_countries_gdp$gdp)/world_gdp
+gdp_share
+
+```
+
+
+
+
+
+
