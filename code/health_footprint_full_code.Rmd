@@ -10,13 +10,14 @@ output:
 params:
     analyze: TRUE
     visualize: TRUE
+    echo_code: FALSE
 ---
 
 This file contains all code to estimate the health carbon footprints, generate the figures in both the main manuscript and the supplementary information, and perform the statistical analysis. It is located in the 'code' sub-folder, pulling files from the 'data' sub-folder and outputting figures and tables into the 'figures' sub-folder. These three sub-folders are self-contained. Keeping 'params:analyze:' and 'params:visualize:' both set to 'TRUE' in the Rmarkdown yaml header above runs the entire code, except for those code chunks set to 'eval = FALSE' which all required a high performance cluster computer. In order to generate only the figures and tables from the main manuscript, set 'params: analyze:' to 'FALSE' in the yaml header above. The data frame from which all main manuscript figures and tables are produced ('df_hcf') is saved in the 'data' sub-folder as both a .csv and .rds file. It can be read in for generating those figures and tables without running the whole code. Both 'params:analyze:' and params:visualize:' need to be set to TRUE in order to generate the figures in the SI, as they require a few more input files than the main 'df_hcf' data frame. 
 
 We first set the two working directories, one for data and one for figure/table output. We also read in required R packages and set a global variable of our study years.
 
-```{r , warning=F, message=F}
+```{r , warning=F, message=F, echo=params$echo_code}
 
 # Set working directories:
 data_dir = "../data/"
@@ -52,7 +53,7 @@ Years = seq(2000,2014,1)
 
 List of files in the 'data' folder, with a brief explanation and their source. These are all the files that are loaded at some point in the script, some being the saved output from calculations performed on the cluster computer. All data from the World Bank are .xls files with metadata included. 
 
-```{r , warning=F, message=F, echo = FALSE}
+```{r , warning=F, message=F, echo=params$echo_code}
 
 file_name = c("OECD_healthexpenditures.csv",
               "OECD_healthinvestment.csv", 
@@ -184,7 +185,7 @@ The health carbon footprint estimates combine health expenditure data mapped to 
 
 First, read in OECD current health expenditure and health investment data from the OECD health statistics database, interpolate missing investment data, join together and convert all expenditure to current US dollar (USD) (OECD health care expenditure data is expressed in local currency units).
 
-```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+```{r, warning = FALSE, message = FALSE, eval = params$analyze, echo=params$echo_code}
 
 # Read in OECD health care expenditure data 
 # Filter for current prices and current (public + private) health expenditure
@@ -280,7 +281,7 @@ hexp = hexp_w_inv %>%
 
 This code calculates the mapped CO2 intensities for the OECD countries in our sample. It needs a lot of resources and so was run on our high performance cluster. It first creates a function which takes a manually created concordance matrix mapping the Eora productions sectors to the 19 SHA health expenditure categories (all concordance matrices are found in the 'data/for_cluster/' sub-sub-folder), and returns the mapped total CO2 intensities of the SHA expenditure categories. Then it loops through each study year, performing the standard input-output calculation with the full version of Eora to calculate the unmapped total CO2 intensities of every Eora production sector in base price for that year. Then the concordance to mapped intensities function is called for each study country in that year. The code chunk is set to 'eval = FALSE' and the saved mapped intensities are loaded locally in the following code chunk. 
 
-```{r, warning = FALSE, message = FALSE, eval = FALSE}
+```{r, warning = FALSE, message = FALSE, eval = FALSE, echo=params$echo_code}
 
 # Calculate mapped intensities for all OECD countries and all years
 # We show here how these are calculated using a cluster computer, saved,
@@ -518,7 +519,7 @@ for (i in Years) {
 
 Read in the saved mapped intensities for the OECD countries, saved in the cluster computer chunk above. 
 
-```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+```{r, warning = FALSE, message = FALSE, eval = params$analyze, echo=params$echo_code}
 
 # Read in OECD mapped intensities saved in previous code chunk 
 # (broken up into 2000 to 2007, and 2008 to 2015 when performing
@@ -536,7 +537,7 @@ Mapped_intensities_OECD = OECD_2000_2007 %>% bind_rows(OECD_2008_2015) %>%
 
 Set the non-OECD countries in the study, China and India. 
 
-```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+```{r, warning = FALSE, message = FALSE, eval = params$analyze, echo=params$echo_code}
 
 # Start calculation of mapped intensities of both non-OECD countries, China and India:
 Non_OECD_countries = c("CHN","IND")
@@ -544,7 +545,7 @@ Non_OECD_countries = c("CHN","IND")
 
 Cluster code for China and India. 'eval = FALSE' here as well. 
 
-```{r, warning = FALSE, message = FALSE, eval = FALSE}
+```{r, warning = FALSE, message = FALSE, eval = FALSE, echo=params$echo_code}
 
 # Calculating the mapped intensities of the non-OECD countries on the cluster
 # computer follows the same procedure, but without solving the matrix inverse 
@@ -724,7 +725,7 @@ for (i in Years) {
 
 Read in mapped intensities for the non-OECD countries, saved in the previous cluster code chunk. Calculate non-OECD health expenditure from World Bank data on gdp and health care/public health care percent of GDP.
 
-```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+```{r, warning = FALSE, message = FALSE, eval = params$analyze, echo=params$echo_code}
 
 # Read in non-OECD mapped intensities saved in previous code chunk:
 non_OECD = readRDS(paste0(data_dir, "mapped_ints_non_OECD.rds"))
@@ -788,7 +789,7 @@ hexp_non_OECD = df_gdp_current_USD_non_OECD %>%
 
 Join health care expenditure data with mapped intensities for both OECD and non-OECD countries, and calculate the health carbon footprint. 
 
-```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+```{r, warning = FALSE, message = FALSE, eval = params$analyze, echo=params$echo_code}
 
 # Join the OECD health care expenditure data with the 
 # mapped intensity data, by country, year, 
@@ -838,7 +839,7 @@ df_hcf_non_OECD_summarised = as.data.frame(df_hcf_non_OECD %>%
 
 Create master dataframe ('df_hcf') for building figures and tables. This requires extra data files including the national carbon footprints of each country calculated with Eora, World Bank population data, World Bank gdp data both in constant 2010 USD and in constant 2011 USD purchasing power parity (PPP), EDGAR CO2 data and IEA total final energy consumption (TFC) data. It also requires expressing health care expenditure (current and investment) in constant 2010 prices. These are each joined to the main dataframe after they are loaded and cleaned appropriately. 
 
-```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+```{r, warning = FALSE, message = FALSE, eval = params$analyze, echo=params$echo_code}
 
 # Create master dataframe from which to build tables
 # and figures by joining OECD and non-OECD (this is 
@@ -911,7 +912,7 @@ df_hcf = df_hcf %>% left_join(df_hcf_OECD_providers, by = c('LOCATION','Year'))
 
 Calculate national carbon footprints using the full version of Eora. This uses the footprints calculated within the cluster code for each year ''all_CO2_', year_current, '.rds'', looping through them, extracting only the countries in our sample and calculating each national footprint for each year. This code chunk is also set to 'eval = FALSE' with the saved national footprints loaded locally in the following code chunk.  
 
-```{r, warning = FALSE, message = FALSE, eval = FALSE}
+```{r, warning = FALSE, message = FALSE, eval = FALSE, echo=params$echo_code}
 
 # Figure 1a and Table 1 require calculating the 
 # health care proportion of national footprints. This 
@@ -962,7 +963,7 @@ national_CO2_footprints = total_footprints_CO2 %>%
 
 Join saved national footprints and World Bank population data to 'df_hcf'. 
 
-```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+```{r, warning = FALSE, message = FALSE, eval = params$analyze, echo=params$echo_code}
 
 # Read in saved national footprints calculated in previous code chunk:
 national_footprints = readRDS(paste0(data_dir, "national_CO2_footprints.rds")) %>% rename(National_CF = National_indirect_CO2_footprint_Gg)
@@ -989,7 +990,7 @@ df_hcf = df_hcf %>% left_join(df_population, by = c('LOCATION','Year'))
 
 Calculate health expenditure data in the same way as before, but now select for 'Constant prices, OECD base year.' The OECD base year is 2010. Join to 'df_hcf'.
 
-```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+```{r, warning = FALSE, message = FALSE, eval = params$analyze, echo=params$echo_code}
 
 # Get health care expenditure in constant 2010 USD for use in both Figure 3 
 # and panel regression. Same procedure as beginning but now filter OECD 
@@ -1132,7 +1133,7 @@ df_hcf = df_hcf %>% left_join(hexp_const,
 
 Read in World Bank GDP in constant 2010 USD and constant 2011 USD PPP. Join both to 'df_hcf'.
 
-```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+```{r, warning = FALSE, message = FALSE, eval = params$analyze, echo=params$echo_code}
 
 # Read in constant 2010 USD GDP required to calculate fractions to apply to GDP PPP:
 df_gdp_const = read_excel(paste0(data_dir, "API_NY.GDP.MKTP.KD_DS2_en_excel_v2_9984757.xls"),
@@ -1171,7 +1172,7 @@ df_hcf = df_hcf %>% left_join(df_gdp_const_ppp, by = c("LOCATION","Year"))
 
 Read in EDGAR direct CO2 data. They are disaggregated into five sources. Create a variable that is the total minus CO2 from non-combustion. Read in IEA energy data on total final consumption (TFC). Join both to 'df_hcf' and save 'df_hcf' to the 'data' folder. 
 
-```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+```{r, warning = FALSE, message = FALSE, eval = params$analyze, echo=params$echo_code}
 
 All_countries_EDGAR_codes = c("USA","GBR","JPN","ESP_AND", "AUS","CAN","DEU","KOR","TUR","AUT",
               "FRA_MCO","ITA_SMR_VAT","MEX", "BEL", "CHE_LIE", "CZE", "DNK", "EST", 
@@ -1262,7 +1263,7 @@ write_csv(df_hcf, paste0(data_dir, "df_hcf.csv"))
 
 'df_hcf' can now be loaded from the 'data' folder when 'params: analyze:' is set to 'FALSE.' Only 'df_hcf' is used to create the figures and tables from the main manuscript. 
 
-```{r, warning = FALSE, message = FALSE, eval = params$visualize}
+```{r, warning = FALSE, message = FALSE, eval = params$visualize, echo=params$echo_code}
 
 df_hcf = readRDS(paste0(data_dir, "df_hcf.rds"))
 
@@ -1275,7 +1276,7 @@ df_hcf = readRDS(paste0(data_dir, "df_hcf.rds"))
 
 Health carbon footprint (HCF) as percentage of national carbon footprint (CF) grouped by regional source (A) and health carbon footprint per capita grouped by financing scheme (B) in 2014 for all available countries in 2014.
 
-```{r , cache=TRUE, warning=F, message=F, fig.width = 20*0.393701, fig.height = 16*0.393701, eval = params$visualize}
+```{r , cache=TRUE, warning=F, message=F, fig.width = 20*0.393701, fig.height = 16*0.393701, eval = params$visualize, echo=params$echo_code}
 
 # Data for figure 1a
 
@@ -1380,7 +1381,7 @@ ggsave(paste0(out_dir_figures, "figure_1.png"), width = 20, height = 16, units =
 
 Health carbon footprints (HCF) in 2014 in absolute terms, per capita and as percentage of the national carbon footprint (CF). Red text indicates values above the sample mean. In the main manuscript, Israel and New Zealand are listed at the bottom of table 1 with the last year where health expenditures were available.
 
-```{r results='asis', cache=TRUE, message=FALSE, warning=FALSE, eval = params$visualize}
+```{r results='asis', cache=TRUE, message=FALSE, warning=FALSE, eval = params$visualize, echo=params$echo_code}
 
 # Calculate the total health carbon footprint in Mt, 
 # the health carbon footprint per capita, 
@@ -1416,7 +1417,7 @@ pdat_table1 %>%
 
 ```
 
-```{r results='asis', cache=TRUE, message=FALSE, warning=FALSE, eval = params$visualize}
+```{r results='asis', cache=TRUE, message=FALSE, warning=FALSE, eval = params$visualize, echo=params$echo_code}
 
 # Write latex table (table 1):
 pdat_table1 %>%
@@ -1444,7 +1445,7 @@ pdat_table1 %>%
 
 Relative shares of health carbon footprint attributable to OECD expenditure categories for entire country sample in 2014.
 
-```{r cache=TRUE, message=FALSE, warning=FALSE, fig.width = 15*0.393701, fig.height = 6*0.393701, eval = params$visualize}
+```{r cache=TRUE, message=FALSE, warning=FALSE, fig.width = 15*0.393701, fig.height = 6*0.393701, eval = params$visualize, echo=params$echo_code}
 
 # Select expenditure provider categories for OECD countries only 
 # and the year 2014. Calculate health carbon 
@@ -1516,7 +1517,7 @@ p2
 
 Development of per capita health care footprint (HCF/cap), health expenditures (const. 2011 int. $)/cap and CO2-intensity of health care for the entire country sample between 2000 and 2014 normalized by country means to illustrate trends on a common axis. Gaps in time series reflect data availability in the OECD health statistics. Panel colors illustrate clusters for countries with absolute (ABS) and relative (REL) decoupling between expenditures and emissions, increasing CO2 intensity (INC), and countries unclassified due to data gaps (NA).
 
-```{r cache=FALSE, message=FALSE, warning=FALSE, fig.width = 17.8*0.393701, fig.height = 9*0.393701, eval = params$visualize}
+```{r cache=FALSE, message=FALSE, warning=FALSE, fig.width = 17.8*0.393701, fig.height = 9*0.393701, eval = params$visualize, echo=params$echo_code}
 
 # Calculate health carbon footprint per capita and
 # select constant 2010 USD health expenditure:
@@ -1642,7 +1643,7 @@ p3
 
 Estimate fixed-effects model.
 
-```{r results='asis', cache=TRUE, message=FALSE, warning=FALSE, eval = params$visualize}
+```{r results='asis', cache=TRUE, message=FALSE, warning=FALSE, eval = params$visualize, echo=params$echo_code}
 
 # Panel analysis: data:
 dat_select = df_hcf %>%
@@ -1800,7 +1801,7 @@ variables are logarithmic.
 Note that standard errors in this table must be replaced with the Driscoll-Kraay robust standard 
 errors calculated in previous code chunk to replicate the table in the main manuscript.
 
-```{r results='asis', cache=TRUE, message=FALSE, warning=FALSE, eval = params$visualize}
+```{r results='asis', cache=TRUE, message=FALSE, warning=FALSE, eval = params$visualize, echo=params$echo_code}
 
 stargazer(fixed_1, fixed_4, header=FALSE, type = "latex", 
           out = paste0(out_dir_figures, "/table2.html"), 
@@ -1822,7 +1823,7 @@ The figures in the supplementary information can only be generated when both 'pa
 
 Map
 
-```{r cache=TRUE, message=FALSE, warning=FALSE, fig.width = 18*0.393701, fig.height = 10*0.393701, eval = params$analyze}
+```{r cache=TRUE, message=FALSE, warning=FALSE, fig.width = 18*0.393701, fig.height = 10*0.393701, eval = params$analyze, echo=params$echo_code}
 
 # Calculate HCF per capita, 
 # filter for the year 2014, and group by quintile:
@@ -1887,7 +1888,7 @@ ggsave(paste0(out_dir_figures, "/SI_figure_1.png"), width = 18, height = 10, uni
 
 SI Figure S2 takes the summarized health expenditure data calculated previously, and shows where both current health expenditure and investment are available, where only current health expenditure data is available, and where neither are available. 
 
-```{r , message=FALSE, warning=FALSE, fig.width=17.8*0.393701, fig.height=6*0.393701, eval = params$analyze}
+```{r , message=FALSE, warning=FALSE, fig.width=17.8*0.393701, fig.height=6*0.393701, eval = params$analyze, echo=params$echo_code}
 
 # Show data coverage between current (public + private) health care expenditure,
 # and health care investment data
@@ -1932,7 +1933,7 @@ ggsave(paste0(out_dir_figures, "SI_figure_2.png"), width = 17.8, height = 6, uni
 
 SI Figure S3 takes the investment data calculated previously to show its share of current health expenditure for those observations where both are available. 
 
-```{r , message=FALSE, warning=FALSE, fig.width=17.8*0.393701, fig.height=10*0.393701, eval = params$analyze}
+```{r , message=FALSE, warning=FALSE, fig.width=17.8*0.393701, fig.height=10*0.393701, eval = params$analyze, echo=params$echo_code}
 
 # Use investment data from previous code chunk to calculate average investment
 # shares of current (public + private) health care expenditure:
@@ -1966,7 +1967,7 @@ ggsave(paste0(out_dir_figures, "SI_figure_3.png"), width = 17.8, height = 10, un
 
 Average shares of health carbon footprint (HCF) attributable to Eora production sectors in 2014 across all OECD countries with 2014 data. The first code chunk is set to 'eval = FALSE' as it is performed on the cluster. It loops through the mapped intensity breakdowns of each country in 2014 (saved when calculating the OECD mapped intensities with the cluster computer) which give the mapped intensities of each production sector in Eora. These are multiplied by health expenditure to calculate the health carbon footprint broken down by the production sector where emissions originally occurred.
 
-```{r, warning = FALSE, message = FALSE, eval = FALSE}
+```{r, warning = FALSE, message = FALSE, eval = FALSE, echo=params$echo_code}
 
 # Use mapped intensities breakdown by production sector (for each country 
 # in 2014) calculated on cluster to average each sector's contribution 
@@ -2097,7 +2098,7 @@ physical_emissions = join %>% mutate_at(.funs = funs(./1000),
 
 Read in the saved emissions broken down by production sector, calculated on the cluster in the previous code chunk.
 
-```{r cache=TRUE, message=FALSE, warning=FALSE, fig.width = 15*0.393701, fig.height = 10*0.393701, eval = params$analyze}
+```{r cache=TRUE, message=FALSE, warning=FALSE, fig.width = 15*0.393701, fig.height = 10*0.393701, eval = params$analyze, echo=params$echo_code}
 
 # Read in physical emissions calculated on cluster and saved in previous code chunk:  
 physical_emissions = readRDS(paste0(data_dir, 
@@ -2156,7 +2157,7 @@ ggsave(paste0(out_dir_figures, "/SI_figure_4.png"), width = 15, height = 10, uni
 
 Percentage contributions of Eora-26 production sectors to the national carbon footprint in 2014, for all countries with 2014 health carbon footprint estimates. The Eora-26 national footprints are calculated on the cluster as well, saved and loaded in the following code chunk. 
 
-```{r, warning = FALSE, message = FALSE, eval = FALSE}
+```{r, warning = FALSE, message = FALSE, eval = FALSE, echo=params$echo_code}
 
 # Cluster script to get Eora-26 national footprints (year 2014):
 Technology_matrix = read.table("../Eora26_2014_bp_T.txt")
@@ -2183,7 +2184,7 @@ all_emissions = t(TIV) * final_demand
 
 Use the Eora-26 national footprints calculated above on the cluster to calculate the percentage contributions of each production sector to the national footprint. 
 
-```{r, warning = FALSE, message = FALSE, eval = params$analyze}
+```{r, warning = FALSE, message = FALSE, eval = params$analyze, echo=params$echo_code}
 
 All_countries = c("USA","GBR","JPN","ESP", "AUS","CAN","DEU","KOR","TUR","AUT",
               "FRA","ITA","MEX", "BEL", "CHE", "CZE", "DNK", "EST", "FIN", "GRC", "HUN", 
@@ -2246,7 +2247,7 @@ totals = bind_with_labels %>% group_by(Sector) %>%
 
 Join the calculated percentages with the main data frame 'df_hcf' to include health care's contribution to the national footprint. Our health care footprint estimates ‘Health Care,’ were subtracted from the larger Eora-26 sector ‘Education, Health and Other Services’ so as not to double count emissions. 
 
-```{r cache=TRUE, message=FALSE, warning=FALSE, fig.width = 20*0.393701, fig.height = 13*0.393701, eval = params$analyze}
+```{r cache=TRUE, message=FALSE, warning=FALSE, fig.width = 20*0.393701, fig.height = 13*0.393701, eval = params$analyze, echo=params$echo_code}
 
 # Calculate percentage contributions of Eora-26 sectors to the national footprint 
 # and include our health care carbon footprint estimates
@@ -2305,7 +2306,7 @@ ggsave(paste0(out_dir_figures, "/SI_figure_5.png"), width = 20, height = 13, uni
 
 This shows the code for calculating the numbers presented in the text, primarily in the 'Results' section of the main manuscript. 
 
-```{r cache=TRUE, message=FALSE, warning=FALSE, eval = params$analyze}
+```{r cache=TRUE, message=FALSE, warning=FALSE, eval = params$analyze, echo=params$echo_code}
 
 # Absolute HCF in 2014:
 pdat_table1 %>% 
